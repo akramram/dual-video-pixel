@@ -234,7 +234,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         root.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
         panel.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> positionLens() }
 
-        chips[0].isSelected = true
+        chips[ScenePreset.entries.indexOf(scene.preset)].isSelected = true
 
         // The viewfinder has the recording aspect (1080x1920) so preview == recorded composition.
         root.addOnLayoutChangeListener { _, l, t, r, b, _, _, _, _ ->

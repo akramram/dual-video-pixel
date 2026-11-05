@@ -60,7 +60,7 @@ enum class ScenePreset(val main: LayoutType, val sub: LayoutType) {
 
 /** Immutable scene description handed to the render thread. */
 data class Scene(
-    val preset: ScenePreset = ScenePreset.SPLIT,
+    val preset: ScenePreset = ScenePreset.PIP,
     /** CameraItemManager.switchTopBottom: exchanges the layouts of the two sources. */
     val swapped: Boolean = false,
     /** Mini window top-left as a fraction of the free travel range (PosData.mMiniMarginLeft/Top). */
