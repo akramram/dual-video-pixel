@@ -140,6 +140,7 @@ class DualCamera(context: Context) {
     fun setTele(tele: Boolean, zoom: Float, onDone: () -> Unit) {
         handler.post {
             teleId = if (tele) plan?.lenses?.lastOrNull()?.physicalId else null
+            Log.d(TAG, "tele=$tele teleId=$teleId per-physical zoom key=${plan?.physicalZoom}")
             backZoom = zoom
             closeDevices()
             openDevices(withFront = !tele, onDone)
@@ -242,7 +243,12 @@ class DualCamera(context: Context) {
                 override fun onConfigured(session: CameraCaptureSession) {
                     store(session)
                     try {
-                        val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                        val request = if (physicalId != null) {
+                            camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD, setOf(physicalId))
+                        } else {
+                            camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                        }
+                        val builder = request.apply {
                             addTarget(surface)
                             set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(DualConfig.FPS, DualConfig.FPS))
                             set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
