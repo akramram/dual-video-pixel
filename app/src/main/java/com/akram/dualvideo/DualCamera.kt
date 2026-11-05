@@ -37,7 +37,7 @@ data class CameraPlan(
     val frontSize: Size,
     /** Rear lenses sorted by focal length; empty if the back camera is not a multi-lens logical camera. */
     val lenses: List<Lens>,
-    /** Fixed frame rates (30, 60) that both cameras offer as an exact AE range, ascending. */
+    /** Fixed back-camera rates (30, 60) as exact AE ranges, ascending; empty unless the front also offers 30. The front streams at most 30. */
     val nativeFps: List<Int>,
 ) {
     /** Recording rates offered: every choice some native rate can serve (24 is a 30 fps stream with dropped frames). */
@@ -126,7 +126,7 @@ class DualCamera(context: Context) {
                 chooseSize(b, DualConfig.BACK_PREVIEW),
                 chooseSize(f, DualConfig.FRONT_PREVIEW),
                 lensesOf(b),
-                listOf(30, 60).filter { hasFixedFps(b, it) && hasFixedFps(f, it) },
+                if (hasFixedFps(f, 30)) listOf(30, 60).filter { hasFixedFps(b, it) } else emptyList(),
             )
         }
         error("no concurrent back+front camera pair on this device")
@@ -253,7 +253,9 @@ class DualCamera(context: Context) {
                     try {
                         val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                             addTarget(surface)
-                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
+                            // The front camera tops out at 30; at 60 the compositor redraws the front's last frame.
+                            val streamFps = if (id == plan?.frontId) minOf(fps, 30) else fps
+                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(streamFps, streamFps))
                             set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
                             tune(this)
                         }
