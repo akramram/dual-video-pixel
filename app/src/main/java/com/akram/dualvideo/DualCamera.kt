@@ -266,12 +266,13 @@ class DualCamera(context: Context) {
     /**
      * Zoom for the back stream via the logical camera's CONTROL_ZOOM_RATIO. In dual mode the HAL picks
      * the lens and never reaches the telephoto. In telephoto mode the stream is bound to the tele
-     * physical camera so it cannot fall back to the main lens; the logical ratio still zooms that stream
-     * (measured: SCALER_CROP_REGION of physical 4 shrinks 2x from 4.27x to 8.56x). The per-physical
-     * zoom key is accepted by the HAL but ignored (physical zoom stays 1.0), so it is not used.
+     * physical camera so it cannot fall back to the main lens; the HAL applies the logical ratio on top
+     * of that lens's native view, so the ratio is divided by the tele lens's own ratio (1.0 = native).
      */
     private fun applyZoom(b: CaptureRequest.Builder) {
-        b.set(CaptureRequest.CONTROL_ZOOM_RATIO, backZoom)
+        val tele = teleId != null
+        val native = if (tele) plan?.lenses?.lastOrNull()?.ratio ?: 1f else 1f
+        b.set(CaptureRequest.CONTROL_ZOOM_RATIO, backZoom / native)
     }
 
     /**
