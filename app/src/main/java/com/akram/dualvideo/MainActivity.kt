@@ -544,7 +544,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     ui.removeCallbacks(timer)
                     if (stopped && result.allOk) {
                         result.uris.firstOrNull()?.let { setThumbnail(it) }
-                        Toast.makeText(this, "Tersimpan di Movies/DualVideo", Toast.LENGTH_SHORT).show()
                     } else {
                         Toast.makeText(this, "Perekaman gagal disimpan", Toast.LENGTH_LONG).show()
                     }
