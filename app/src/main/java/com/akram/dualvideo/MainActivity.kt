@@ -57,6 +57,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var thumbnail: ThumbnailView
     private lateinit var pauseButton: GlyphButton
     private lateinit var swapButton: GlyphButton
+    private lateinit var lensHolder: FrameLayout
 
     private var compositor: GlCompositor? = null
     private var camera: DualCamera? = null
@@ -106,6 +107,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         surfaceView.holder.addCallback(this)
         surfaceView.setOnTouchListener(::onPreviewTouch)
         root.addView(surfaceView)
+        lensHolder = FrameLayout(this)
+        root.addView(lensHolder, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
 
         // Top overlay: 1 file / 2 file switch when idle, timer while recording.
         typeToggle = SegmentedToggle(
@@ -200,6 +203,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(shutterRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(10f) })
         }
         root.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+        panel.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> positionLens() }
 
         chips[0].isSelected = true
 
@@ -218,6 +222,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 lp.width = pw
                 lp.height = ph
                 lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                positionLens()
                 surfaceView.layoutParams = lp
             }
         }
@@ -231,6 +236,30 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     // ---- messages & permissions -----------------------------------------------------------------
+
+    /** Keeps the lens bar 12dp above whichever ends first: the viewfinder or the top of the bottom panel. */
+    private fun positionLens() {
+        val bottom = minOf(surfaceView.layoutParams.height, panel.top.takeIf { it > 0 } ?: Int.MAX_VALUE)
+        val lp = lensHolder.layoutParams as FrameLayout.LayoutParams
+        val top = bottom - dpi(60f)
+        if (lp.topMargin != top) {
+            lp.topMargin = top
+            lensHolder.layoutParams = lp
+        }
+    }
+
+    /** Rear lens switch (e.g. 0.7× / 1× / 4×) shown over the bottom of the viewfinder. */
+    private fun showLenses(lenses: List<Lens>, cam: DualCamera) {
+        lensHolder.removeAllViews()
+        if (lenses.size < 2) return
+        val toggle = SegmentedToggle(
+            this, lenses.map { it.label },
+            lenses.map { "Lensa belakang ${it.label}" },
+        ) { cam.setBackZoom(lenses[it].ratio) }
+        // The back camera starts at zoom 1.0 (main lens); select the lens closest to it.
+        toggle.select(lenses.indices.minBy { kotlin.math.abs(lenses[it].ratio - 1f) }, notify = false)
+        lensHolder.addView(toggle)
+    }
 
     private fun showMessage(text: String, actionLabel: String? = null, action: (() -> Unit)? = null) {
         messageText.text = text
@@ -315,6 +344,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         worker.execute {
             try {
                 val plan = cam.plan()
+                ui.post { showLenses(plan.lenses, cam) }
                 val sources = gl.start(surface, plan.specs())
                 cam.open(
                     plan, sources,
