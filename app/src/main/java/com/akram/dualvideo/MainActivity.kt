@@ -83,6 +83,11 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var recordType = RecordType.MERGED
     private var lastVideo: Uri? = null
 
+    private lateinit var settingsChip: TextView
+    private var settings = VideoSettings()
+    private var activeSettings = VideoSettings()
+    private var fpsOptions = listOf(30)
+
     private val timer = object : Runnable {
         override fun run() {
             val r = recorders ?: return
@@ -101,6 +106,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             0,
             WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
         )
+        settings = loadSettings()
+        activeSettings = settings
         buildUi()
         if (!hasPermissions()) requestPerms()
     }
@@ -138,9 +145,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             addView(timerDot, LinearLayout.LayoutParams(dpi(10f), dpi(10f)).apply { rightMargin = dpi(8f) })
             addView(timerText)
         }
+        settingsChip = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 14f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            background = pill(Palette.SCRIM, 24f, this@MainActivity)
+            setPadding(dpi(16f), 0, dpi(16f), 0)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showSettingsDialog() }
+        }
         topBar = FrameLayout(this).apply {
             addView(typeToggle, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL))
             addView(timerPill, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dpi(44f), Gravity.CENTER_HORIZONTAL))
+            addView(settingsChip, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dpi(48f), Gravity.END or Gravity.CENTER_VERTICAL).apply { rightMargin = dpi(16f) })
         }
         root.addView(topBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
 
@@ -224,10 +241,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val w = r - l
             val h = b - t
             var pw = w
-            var ph = pw * DualConfig.OUTPUT.height / DualConfig.OUTPUT.width
+            var ph = pw * settings.resolution.output.height / settings.resolution.output.width
             if (ph > h) {
                 ph = h
-                pw = ph * DualConfig.OUTPUT.width / DualConfig.OUTPUT.height
+                pw = ph * settings.resolution.output.width / settings.resolution.output.height
             }
             val lp = surfaceView.layoutParams as FrameLayout.LayoutParams
             if (lp.width != pw || lp.height != ph) {
@@ -438,19 +455,30 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         cameraReady = false
         shutter.isEnabled = false
         showMessage("Membuka kamera…")
-        val gl = GlCompositor().also { it.scene = scene }
+        val gl = GlCompositor(settings.resolution.output).also { it.scene = scene }
         val cam = DualCamera(this)
         compositor = gl
         camera = cam
-        recorders = MultiRecorderManager(applicationContext)
+        recorders = null
         val surface = holder.surface
         worker.execute {
             try {
                 val plan = cam.plan()
-                ui.post { showLenses(plan.lenses, cam) }
+                // The saved fps may not exist on this device pair; fall back to 30, then to what is offered.
+                val fps = plan.fpsOptions.firstOrNull { it == settings.fps } ?: plan.fpsOptions.firstOrNull { it == 30 } ?: plan.fpsOptions.first()
+                ui.post {
+                    if (camera !== cam) return@post
+                    fpsOptions = plan.fpsOptions
+                    activeSettings = settings.copy(fps = fps)
+                    recorders = MultiRecorderManager(applicationContext, activeSettings)
+                    refreshSettingsChip()
+                    showLenses(plan.lenses, cam)
+                }
+                gl.recordFps = fps
+                gl.sourceFps = plan.cameraFps(fps)
                 val sources = gl.start(surface, plan.specs())
                 cam.open(
-                    plan, sources,
+                    plan, sources, plan.cameraFps(fps),
                     onReady = { ui.post { cameraReady = true; shutter.isEnabled = !busy; hideMessage() } },
                     onError = { msg -> fail(msg) },
                 )
@@ -574,6 +602,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         shutter.recording = recording
         shutter.isEnabled = cameraReady && !busy
         typeToggle.visibility = if (recording) View.INVISIBLE else View.VISIBLE
+        settingsChip.visibility = if (recording) View.INVISIBLE else View.VISIBLE
         timerPill.visibility = if (recording) View.VISIBLE else View.INVISIBLE
         pauseButton.visibility = if (recording) View.VISIBLE else View.GONE
         thumbnail.visibility = if (recording) View.GONE else View.VISIBLE
@@ -598,6 +627,63 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             }
             if (uri != null) setThumbnail(uri)
         }
+    }
+
+    // ---- video settings -------------------------------------------------------------------------------
+
+    private fun loadSettings(): VideoSettings {
+        val p = getSharedPreferences("video", MODE_PRIVATE)
+        val res = Resolution.entries.firstOrNull { it.name == p.getString("resolution", null) } ?: Resolution.FHD
+        return VideoSettings(res, p.getInt("fps", 30))
+    }
+
+    private fun refreshSettingsChip() {
+        val s = activeSettings
+        settingsChip.text = "${s.resolution.label} · ${s.fps}"
+        settingsChip.contentDescription = "Kualitas video: ${s.resolution.label}, ${s.fps} frame per detik. Ketuk untuk mengubah"
+    }
+
+    /** Resolution and frame-rate picker; a change is saved and restarts the camera when the dialog closes. */
+    private fun showSettingsDialog() {
+        if (recorders?.isRecording == true || busy) return
+        var res = activeSettings.resolution
+        var fps = activeSettings.fps
+        fun label(text: String) = TextView(this).apply { setTextColor(Color.WHITE); textSize = 14f; text.also { this.text = it } }
+        val resToggle = SegmentedToggle(
+            this, Resolution.entries.map { it.label },
+            Resolution.entries.map { "Resolusi ${it.label}" },
+        ) { res = Resolution.entries[it] }
+        resToggle.select(Resolution.entries.indexOf(res), false)
+        val fpsToggle = SegmentedToggle(
+            this, fpsOptions.map { "$it" },
+            fpsOptions.map { "$it frame per detik" },
+        ) { fps = fpsOptions[it] }
+        fpsToggle.select(fpsOptions.indexOf(fps).coerceAtLeast(0), false)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = pill(0xFF1E1E1E.toInt(), 20f, this@MainActivity)
+            setPadding(dpi(24f), dpi(20f), dpi(24f), dpi(24f))
+            addView(label("Resolusi"))
+            addView(resToggle, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(8f) })
+            addView(label("Frame rate (fps)"), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(20f) })
+            addView(fpsToggle, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(8f) })
+        }
+        val dialog = android.app.Dialog(this)
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.setContentView(box)
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        dialog.setOnDismissListener {
+            if (res != activeSettings.resolution || fps != activeSettings.fps) {
+                settings = VideoSettings(res, fps)
+                getSharedPreferences("video", MODE_PRIVATE).edit().putString("resolution", res.name).putInt("fps", fps).apply()
+                val h = surfaceHolder
+                if (h != null) {
+                    stopPipeline()
+                    startPipeline(h)
+                }
+            }
+        }
+        dialog.show()
     }
 
     private fun setThumbnail(uri: Uri) {

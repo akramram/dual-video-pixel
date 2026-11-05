@@ -27,6 +27,7 @@ class MiRecorder(
     val tag: String,
     val source: SourceType?,
     private val orientationHint: Int,
+    private val settings: VideoSettings,
 ) {
     private val resolver: ContentResolver = context.contentResolver
     private val surface: Surface = MediaCodec.createPersistentInputSurface()
@@ -41,7 +42,7 @@ class MiRecorder(
     val inputSurface: Surface get() = surface
 
     fun prepare(startStamp: String) {
-        val profile = CamcorderProfile.get(CamcorderProfile.QUALITY_1080P)
+        val profile = CamcorderProfile.get(settings.resolution.quality)
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, "VID_${startStamp}_$tag.mp4")
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
@@ -58,9 +59,9 @@ class MiRecorder(
         r.setAudioSource(MediaRecorder.AudioSource.MIC)
         r.setOutputFormat(profile.fileFormat)
         r.setVideoEncoder(profile.videoCodec)
-        r.setVideoSize(DualConfig.OUTPUT.width, DualConfig.OUTPUT.height)
-        r.setVideoFrameRate(profile.videoFrameRate)
-        r.setVideoEncodingBitRate(profile.videoBitRate)
+        r.setVideoSize(settings.resolution.output.width, settings.resolution.output.height)
+        r.setVideoFrameRate(settings.fps)
+        r.setVideoEncodingBitRate((profile.videoBitRate.toLong() * settings.fps / profile.videoFrameRate).toInt())
         r.setAudioEncodingBitRate(profile.audioBitRate)
         r.setAudioChannels(profile.audioChannels)
         r.setAudioSamplingRate(profile.audioSampleRate)
@@ -126,7 +127,7 @@ class MiRecorder(
  * Reproduction of MultiRecorderManager: one recorder for RecordType.MERGED, two (main + sub) for
  * RecordType.STANDALONE. Start/stop act on every recorder; stop runs them in parallel.
  */
-class MultiRecorderManager(private val context: Context) {
+class MultiRecorderManager(private val context: Context, private val settings: VideoSettings) {
     private var recorders: List<MiRecorder> = emptyList()
     var isRecording = false
         private set
@@ -140,10 +141,10 @@ class MultiRecorderManager(private val context: Context) {
     fun start(type: RecordType, orientationHint: Int): List<RecordTarget> {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         recorders = when (type) {
-            RecordType.MERGED -> listOf(MiRecorder(context, "merged", null, orientationHint))
+            RecordType.MERGED -> listOf(MiRecorder(context, "merged", null, orientationHint, settings))
             RecordType.STANDALONE -> listOf(
-                MiRecorder(context, "back", SourceType.MAIN, orientationHint),
-                MiRecorder(context, "front", SourceType.SUB, orientationHint),
+                MiRecorder(context, "back", SourceType.MAIN, orientationHint, settings),
+                MiRecorder(context, "front", SourceType.SUB, orientationHint, settings),
             )
         }
         try {

@@ -37,7 +37,15 @@ data class CameraPlan(
     val frontSize: Size,
     /** Rear lenses sorted by focal length; empty if the back camera is not a multi-lens logical camera. */
     val lenses: List<Lens>,
+    /** Fixed frame rates (30, 60) that both cameras offer as an exact AE range, ascending. */
+    val nativeFps: List<Int>,
 ) {
+    /** Recording rates offered: every choice some native rate can serve (24 is a 30 fps stream with dropped frames). */
+    val fpsOptions: List<Int> = DualConfig.FPS_CHOICES.filter { f -> nativeFps.any { it >= f } }
+
+    /** The stream rate used to record at [fps]: the lowest native rate that is not below it. */
+    fun cameraFps(fps: Int): Int = nativeFps.first { it >= fps }
+
     fun specs(): List<SourceSpec> = listOf(
         SourceSpec(SourceType.MAIN, backSize, front = false),
         SourceSpec(SourceType.SUB, frontSize, front = true),
@@ -69,6 +77,7 @@ class DualCamera(context: Context) {
     private var plan: CameraPlan? = null
     private var surfaces: Map<SourceType, Surface> = emptyMap()
     private var onError: (String) -> Unit = {}
+    @Volatile private var fps = 30
 
     private var back: CameraDevice? = null
     private var front: CameraDevice? = null
@@ -117,14 +126,16 @@ class DualCamera(context: Context) {
                 chooseSize(b, DualConfig.BACK_PREVIEW),
                 chooseSize(f, DualConfig.FRONT_PREVIEW),
                 lensesOf(b),
+                listOf(30, 60).filter { hasFixedFps(b, it) && hasFixedFps(f, it) },
             )
         }
         error("no concurrent back+front camera pair on this device")
     }
 
-    fun open(plan: CameraPlan, surfaces: Map<SourceType, Surface>, onReady: () -> Unit, onError: (String) -> Unit) {
+    fun open(plan: CameraPlan, surfaces: Map<SourceType, Surface>, fps: Int, onReady: () -> Unit, onError: (String) -> Unit) {
         this.plan = plan
         this.surfaces = surfaces
+        this.fps = fps
         this.onError = onError
         openDevices(withFront = true, onReady)
     }
@@ -242,7 +253,7 @@ class DualCamera(context: Context) {
                     try {
                         val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                             addTarget(surface)
-                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(DualConfig.FPS, DualConfig.FPS))
+                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
                             set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
                             tune(this)
                         }
@@ -301,6 +312,9 @@ class DualCamera(context: Context) {
         val shown = if (r < 1f) Math.round(r * 10) / 10f else if (r < 2f) Math.round(r * 2) / 2f else Math.round(r).toFloat()
         return if (shown == shown.toInt().toFloat()) "${shown.toInt()}×" else "$shown×"
     }
+
+    private fun hasFixedFps(chars: CameraCharacteristics, fps: Int) =
+        chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.any { it.lower == fps && it.upper == fps } == true
 
     /** Largest 16:9 SurfaceTexture size not above [target]; falls back to the closest area. */
     private fun chooseSize(chars: CameraCharacteristics, target: Size): Size {

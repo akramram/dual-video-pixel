@@ -42,7 +42,7 @@ data class RecordTarget(val surface: Surface, val source: SourceType?)
  * Deviation: Xiaomi gives each recorder its own RenderHandler thread and shared EGL context; this
  * uses one GL thread and one context with several window surfaces.
  */
-class GlCompositor {
+class GlCompositor(private val output: Size) {
     private class Source(val spec: SourceSpec) {
         var texId = 0
         lateinit var texture: SurfaceTexture
@@ -64,6 +64,11 @@ class GlCompositor {
      * full-frame. A separate front recorder (2 files) keeps receiving the front's last frame.
      */
     @Volatile var frontEnabled = true
+
+    /** Recording frame rate and the (>=) rate the cameras actually stream at. */
+    @Volatile var recordFps = 30
+    @Volatile var sourceFps = 30
+    private var nextDueNs = 0L
 
     @Volatile private var recording = false
     @Volatile private var paused = false
@@ -139,6 +144,7 @@ class GlCompositor {
     fun startRecording(targets: List<RecordTarget>) = call {
         recordSurfaces = targets.map { RecordSurface(createWindowSurface(it.surface), it.source) }
         bootToMonotonicNs = SystemClock.elapsedRealtimeNanos() - System.nanoTime()
+        nextDueNs = 0L
         paused = false
         recording = true
     }
@@ -198,12 +204,28 @@ class GlCompositor {
         }
     }
 
+    /**
+     * True when a frame should be recorded. Cameras may run faster than the chosen recording fps
+     * (e.g. 24 from a 30 fps stream): frames are then dropped on a fixed schedule from the camera
+     * timestamps, which keeps the average rate exact at the cost of uneven frame spacing.
+     */
+    private fun recordFrameDue(): Boolean {
+        if (recordFps >= sourceFps) return true
+        val ts = sources[SourceType.MAIN]?.timestampNs ?: return true
+        val gap = 1_000_000_000L / recordFps
+        if (nextDueNs == 0L) nextDueNs = ts
+        if (ts < nextDueNs - 1_000_000_000L / sourceFps / 2) return false
+        nextDueNs += gap
+        if (nextDueNs < ts) nextDueNs = ts + gap
+        return true
+    }
+
     private fun render() {
         val scene = scene
-        if (recording && !paused) {
+        if (recording && !paused && recordFrameDue()) {
             val ts = (sources[SourceType.MAIN]?.timestampNs ?: 0L) - bootToMonotonicNs
-            val w = DualConfig.OUTPUT.width
-            val h = DualConfig.OUTPUT.height
+            val w = output.width
+            val h = output.height
             for (rs in recordSurfaces) {
                 makeCurrent(rs.egl)
                 val entries = if (rs.source == null) composite(scene, w, h)

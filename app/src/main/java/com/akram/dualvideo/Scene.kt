@@ -1,6 +1,7 @@
 package com.akram.dualvideo
 
 import android.graphics.Rect
+import android.media.CamcorderProfile
 import android.util.Size
 
 /**
@@ -8,18 +9,13 @@ import android.util.Size
  * `com.android.camera.dualvideo` package (see docs/REA-FINDINGS.md for evidence).
  */
 object DualConfig {
-    /** DualVideoModuleBase.updateFpsRange: Range.create(30, 30) (24 on some platforms). */
-    const val FPS = 30
+    /** Frame rates offered in the settings (DualVideoModuleBase used a fixed 30); only those both cameras report are shown. */
+    val FPS_CHOICES = listOf(24, 30, 60)
 
     /** DualVideoModuleBase.updatePictureAndPreviewSize: back 1920x1080, front 1280x720. */
     val BACK_PREVIEW = Size(1920, 1080)
     val FRONT_PREVIEW = Size(1280, 720)
 
-    /**
-     * Composite/recording canvas. MiRecorder uses CamcorderProfile quality 1080P and calls
-     * setVideoSize(height, width), i.e. portrait 1080x1920.
-     */
-    val OUTPUT = Size(1080, 1920)
 
     /** PosData.MINI_SCALE_X / MINI_SCALE_Y. */
     const val MINI_SCALE = 0.3333f
@@ -30,6 +26,18 @@ object DualConfig {
     /** Design choice (not observed): the front image is not mirrored in preview or recording. */
     const val MIRROR_FRONT = false
 }
+
+/**
+ * Recording canvas. MiRecorder uses a CamcorderProfile (1080P in Xiaomi) with swapped width/height,
+ * i.e. portrait; 720P is the extra choice. Camera streams stay at BACK_PREVIEW/FRONT_PREVIEW.
+ */
+enum class Resolution(val label: String, val output: Size, val quality: Int) {
+    HD("720p", Size(720, 1280), CamcorderProfile.QUALITY_720P),
+    FHD("1080p", Size(1080, 1920), CamcorderProfile.QUALITY_1080P),
+}
+
+/** User-selected recording quality; [fps] is clamped to what both cameras offer before use. */
+data class VideoSettings(val resolution: Resolution = Resolution.FHD, val fps: Int = 30)
 
 /** RenderSourceType: MAIN_SOURCE is the back camera, SUB_SOURCE the front camera. */
 enum class SourceType { MAIN, SUB }
