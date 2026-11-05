@@ -86,8 +86,8 @@ class MiRecorder(
         isPaused = false
     }
 
-    /** Stops and finalises the file. Returns false if MediaRecorder reported an error (file deleted). */
-    fun stop(): Boolean {
+    /** Stops and finalises the file. Returns its Uri, or null if MediaRecorder reported an error (file deleted). */
+    fun stop(): Uri? {
         var ok = true
         try {
             recorder?.stop()
@@ -105,7 +105,7 @@ class MiRecorder(
             }
         }
         isRecording = false
-        return ok
+        return if (ok) uri else null
     }
 
     private fun release() {
@@ -181,13 +181,17 @@ class MultiRecorderManager(private val context: Context) {
         return now - startedAtMs - pausedTotalMs
     }
 
-    /** Stops every recorder in parallel; true only if all files were finalised. */
-    fun stop(): Boolean {
-        if (!isRecording) return true
+    /** Stops every recorder in parallel; returns the Uris of the files that were finalised. */
+    fun stop(): StopResult {
+        if (!isRecording) return StopResult(emptyList(), true)
         isRecording = false
         val list = recorders
         recorders = emptyList()
         val futures = list.map { r -> CompletableFuture.supplyAsync { r.stop() } }
-        return futures.all { it.get() }
+        val uris = futures.mapNotNull { it.get() }
+        return StopResult(uris, uris.size == list.size)
     }
 }
+
+/** [uris] are the finalised files; [allOk] is false if any recorder failed. */
+data class StopResult(val uris: List<Uri>, val allOk: Boolean)

@@ -2,72 +2,209 @@ package com.akram.dualvideo
 
 import android.Manifest
 import android.app.Activity
+import android.content.ContentResolver
+import android.content.ContentUris
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Log
+import android.util.Size
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import java.io.IOException
 import java.util.concurrent.Executors
 import kotlin.math.abs
 
+/**
+ * Camera-style screen: full-bleed 9:16 viewfinder, a bottom panel with the layout chips above a
+ * thumbnail / shutter / swap row (as in Google Camera and Xiaomi Camera), and a small top overlay
+ * that holds the "1 file / 2 file" switch while idle and the timer while recording.
+ */
 class MainActivity : Activity(), SurfaceHolder.Callback {
     private val ui = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
 
     private lateinit var surfaceView: SurfaceView
-    private lateinit var status: TextView
-    private lateinit var recButton: Button
-    private lateinit var pauseButton: Button
-    private lateinit var typeButton: Button
-    private lateinit var presetButton: Button
+    private lateinit var topBar: FrameLayout
+    private lateinit var panel: LinearLayout
+    private lateinit var typeToggle: SegmentedToggle
+    private lateinit var timerPill: LinearLayout
+    private lateinit var timerDot: View
+    private lateinit var timerText: TextView
+    private lateinit var messageBox: LinearLayout
+    private lateinit var messageText: TextView
+    private lateinit var messageAction: TextView
+    private lateinit var chips: List<GlyphChip>
+    private lateinit var shutter: ShutterView
+    private lateinit var thumbnail: ThumbnailView
+    private lateinit var pauseButton: GlyphButton
+    private lateinit var swapButton: GlyphButton
 
     private var compositor: GlCompositor? = null
     private var camera: DualCamera? = null
     private var recorders: MultiRecorderManager? = null
     private var running = false
+    private var cameraReady = false
+    private var busy = false
     private var surfaceHolder: SurfaceHolder? = null
 
     private var scene = Scene()
     private var recordType = RecordType.MERGED
+    private var lastVideo: Uri? = null
 
     private val timer = object : Runnable {
         override fun run() {
-            val r = recorders
-            if (r != null && r.isRecording) {
-                val s = r.elapsedMs() / 1000
-                status.text = "%s %02d:%02d".format(if (r.isPaused) "PAUSED" else "REC", s / 60, s % 60)
-                ui.postDelayed(this, 250)
-            }
+            val r = recorders ?: return
+            if (!r.isRecording) return
+            val s = r.elapsedMs() / 1000
+            timerText.text = "%02d:%02d%s".format(s / 60, s % 60, if (r.isPaused) "  ·  Dijeda" else "")
+            (timerDot.background as android.graphics.drawable.GradientDrawable).setColor(if (r.isPaused) Palette.WHITE else Palette.RED)
+            ui.postDelayed(this, 250)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.setDecorFitsSystemWindows(false)
+        window.insetsController?.setSystemBarsAppearance(
+            0,
+            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+        )
         buildUi()
-        if (!hasPermissions()) {
-            requestPermissions(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO), REQ_PERMS)
-        }
+        if (!hasPermissions()) requestPerms()
     }
+
+    override fun onResume() {
+        super.onResume()
+        refreshThumbnail()
+    }
+
+    // ---- UI construction ----------------------------------------------------------------------
 
     private fun buildUi() {
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+
         surfaceView = SurfaceView(this)
         surfaceView.holder.addCallback(this)
+        surfaceView.setOnTouchListener(::onPreviewTouch)
         root.addView(surfaceView)
+
+        // Top overlay: 1 file / 2 file switch when idle, timer while recording.
+        typeToggle = SegmentedToggle(
+            this, listOf("1 file", "2 file"),
+            listOf("Rekam jadi satu file gabungan", "Rekam jadi dua file terpisah, satu per kamera"),
+        ) { recordType = if (it == 0) RecordType.MERGED else RecordType.STANDALONE }
+        timerDot = View(this).apply { background = pill(Palette.RED, 5f, this@MainActivity) }
+        timerText = TextView(this).apply { setTextColor(Color.WHITE); textSize = 16f; typeface = android.graphics.Typeface.DEFAULT_BOLD; text = "00:00" }
+        timerPill = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = pill(Palette.SCRIM, 22f, this@MainActivity)
+            setPadding(dpi(14f), 0, dpi(16f), 0)
+            visibility = View.INVISIBLE
+            addView(timerDot, LinearLayout.LayoutParams(dpi(10f), dpi(10f)).apply { rightMargin = dpi(8f) })
+            addView(timerText)
+        }
+        topBar = FrameLayout(this).apply {
+            addView(typeToggle, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL))
+            addView(timerPill, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dpi(44f), Gravity.CENTER_HORIZONTAL))
+        }
+        root.addView(topBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
+
+        // Centre message: opening camera, errors, missing permission.
+        messageText = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 16f; gravity = Gravity.CENTER
+            background = pill(Palette.SCRIM, 16f, this@MainActivity)
+            setPadding(dpi(20f), dpi(12f), dpi(20f), dpi(12f))
+        }
+        messageAction = TextView(this).apply {
+            setTextColor(Color.BLACK); textSize = 15f; gravity = Gravity.CENTER
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            background = pill(Palette.WHITE, 24f, this@MainActivity)
+            minHeight = dpi(48f)
+            setPadding(dpi(24f), 0, dpi(24f), 0)
+            isClickable = true
+            isFocusable = true
+        }
+        messageBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            visibility = View.GONE
+            addView(messageText, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(messageAction, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(12f) })
+        }
+        root.addView(messageBox, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply {
+            leftMargin = dpi(24f); rightMargin = dpi(24f)
+        })
+
+        // Bottom panel: layout chips, then thumbnail / shutter / swap.
+        val presets = listOf(
+            Triple(ScenePreset.SPLIT, Glyph.SPLIT, "Bagi"),
+            Triple(ScenePreset.STACK, Glyph.STACK, "Tumpuk"),
+            Triple(ScenePreset.PIP, Glyph.PIP, "PiP"),
+        )
+        chips = presets.map { (preset, glyph, label) ->
+            GlyphChip(this, glyph, label).also { chip ->
+                chip.setOnClickListener { selectPreset(preset) }
+            }
+        }
+        val chipRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            chips.forEachIndexed { i, c ->
+                addView(c, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (i > 0) leftMargin = dpi(8f) })
+            }
+        }
+
+        shutter = ShutterView(this).apply { isEnabled = false; setOnClickListener { toggleRecord() } }
+        thumbnail = ThumbnailView(this).apply { setOnClickListener { openLastVideo() } }
+        pauseButton = GlyphButton(this, Glyph.PAUSE, "Jeda").apply { visibility = View.GONE; setOnClickListener { togglePause() } }
+        swapButton = GlyphButton(this, Glyph.SWAP, "Tukar posisi kamera").apply { setOnClickListener { updateScene(scene.copy(swapped = !scene.swapped)) } }
+
+        fun slot(child: View) = FrameLayout(this).apply {
+            addView(child, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        }
+        val leftSlot = FrameLayout(this).apply {
+            addView(thumbnail, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+            addView(pauseButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        }
+        val shutterRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(leftSlot, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(shutter, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(slot(swapButton), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.BLACK)
+            addView(chipRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(shutterRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(10f) })
+        }
+        root.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+
+        chips[0].isSelected = true
+
+        // The viewfinder has the recording aspect (1080x1920) so preview == recorded composition.
         root.addOnLayoutChangeListener { _, l, t, r, b, _, _, _, _ ->
-            // Preview canvas has the recording aspect (1080x1920) so preview == recorded composition.
             val w = r - l
             val h = b - t
             var pw = w
@@ -84,46 +221,59 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 surfaceView.layoutParams = lp
             }
         }
-        surfaceView.setOnTouchListener(::onPreviewTouch)
-
-        status = TextView(this).apply { setTextColor(Color.WHITE); textSize = 14f; gravity = Gravity.CENTER; text = "starting" }
-        presetButton = button("Split") { cyclePreset() }
-        val swap = button("Swap") { updateScene(scene.copy(swapped = !scene.swapped)) }
-        typeButton = button("Merged") { toggleType() }
-        pauseButton = button("Pause") { togglePause() }.apply { isEnabled = false }
-        recButton = button("REC") { toggleRecord() }
-
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        listOf(presetButton, swap, typeButton, pauseButton, recButton).forEach {
-            row.addView(it, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            val bars = insets.getInsets(WindowInsets.Type.systemBars())
+            topBar.setPadding(dpi(16f), bars.top + dpi(8f), dpi(16f), 0)
+            panel.setPadding(dpi(24f), dpi(12f), dpi(24f), bars.bottom + dpi(12f))
+            insets
         }
-        val controls = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0x99000000.toInt())
-            setPadding(16, 16, 16, 24)
-            addView(status)
-            addView(row)
-        }
-        root.addView(controls, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
         setContentView(root)
     }
 
-    private fun button(label: String, onClick: () -> Unit) = Button(this).apply {
-        text = label
-        isAllCaps = false
-        setOnClickListener { onClick() }
+    // ---- messages & permissions -----------------------------------------------------------------
+
+    private fun showMessage(text: String, actionLabel: String? = null, action: (() -> Unit)? = null) {
+        messageText.text = text
+        if (actionLabel != null && action != null) {
+            messageAction.text = actionLabel
+            messageAction.setOnClickListener { action() }
+            messageAction.visibility = View.VISIBLE
+        } else {
+            messageAction.visibility = View.GONE
+        }
+        messageBox.visibility = View.VISIBLE
+    }
+
+    private fun hideMessage() {
+        messageBox.visibility = View.GONE
     }
 
     private fun hasPermissions() =
         checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        if (requestCode != REQ_PERMS) return
-        if (hasPermissions()) surfaceHolder?.let { startPipeline(it) } else status.text = "camera + microphone permission required"
+    private fun requestPerms() {
+        requestPermissions(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO), REQ_PERMS)
     }
 
-    // ---- surface lifecycle ----------------------------------------------------------------
+    private fun showPermissionNeeded() {
+        val canAsk = shouldShowRequestPermissionRationale(Manifest.permission.CAMERA) ||
+            shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
+        showMessage(
+            "Izin kamera dan mikrofon diperlukan untuk merekam.",
+            if (canAsk) "Beri izin" else "Buka pengaturan",
+        ) {
+            if (canAsk) requestPerms()
+            else startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        if (requestCode != REQ_PERMS) return
+        if (hasPermissions()) surfaceHolder?.let { startPipeline(it) } else showPermissionNeeded()
+    }
+
+    // ---- surface lifecycle ------------------------------------------------------------------------
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         surfaceHolder = holder
@@ -131,7 +281,10 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         surfaceHolder = holder
-        if (!hasPermissions()) return
+        if (!hasPermissions()) {
+            if (!running) showPermissionNeeded()
+            return
+        }
         val c = compositor
         if (running && c != null) {
             worker.execute { runCatching { c.setPreviewSurface(holder.surface) } }
@@ -145,11 +298,14 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         stopPipeline()
     }
 
-    // ---- pipeline --------------------------------------------------------------------------
+    // ---- pipeline ------------------------------------------------------------------------------------
 
     private fun startPipeline(holder: SurfaceHolder) {
         if (running) return
         running = true
+        cameraReady = false
+        shutter.isEnabled = false
+        showMessage("Membuka kamera…")
         val gl = GlCompositor().also { it.scene = scene }
         val cam = DualCamera(this)
         compositor = gl
@@ -162,12 +318,27 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 val sources = gl.start(surface, plan.specs())
                 cam.open(
                     plan, sources,
-                    onReady = { ui.post { status.text = "back ${plan.backSize} / front ${plan.frontSize}" } },
-                    onError = { msg -> Log.e(TAG, msg); ui.post { status.text = msg } },
+                    onReady = { ui.post { cameraReady = true; shutter.isEnabled = !busy; hideMessage() } },
+                    onError = { msg -> fail(msg) },
                 )
             } catch (t: Throwable) {
                 Log.e(TAG, "pipeline start failed", t)
-                ui.post { status.text = "start failed: ${t.message}" }
+                fail(t.message ?: t.javaClass.simpleName)
+            }
+        }
+    }
+
+    private fun fail(reason: String) {
+        Log.e(TAG, reason)
+        ui.post {
+            cameraReady = false
+            shutter.isEnabled = false
+            showMessage("Kamera tidak bisa dibuka.\n$reason", "Coba lagi") {
+                val h = surfaceHolder
+                if (h != null) {
+                    stopPipeline()
+                    startPipeline(h)
+                }
             }
         }
     }
@@ -175,6 +346,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun stopPipeline() {
         if (!running) return
         running = false
+        cameraReady = false
         val gl = compositor
         val cam = camera
         val rec = recorders
@@ -182,7 +354,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         camera = null
         recorders = null
         ui.removeCallbacks(timer)
-        setRecordingUi(false)
+        busy = false
+        showRecordingUi(false)
         worker.execute {
             if (rec != null && rec.isRecording) {
                 runCatching { gl?.stopRecording() }
@@ -193,48 +366,55 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
-    // ---- controls --------------------------------------------------------------------------
+    // ---- controls ---------------------------------------------------------------------------------------
 
     private fun updateScene(s: Scene) {
         scene = s
         compositor?.scene = s
     }
 
-    private fun cyclePreset() {
-        val next = ScenePreset.entries[(scene.preset.ordinal + 1) % ScenePreset.entries.size]
-        presetButton.text = next.name.lowercase().replaceFirstChar { it.uppercase() }
-        updateScene(scene.copy(preset = next))
-    }
-
-    private fun toggleType() {
-        if (recorders?.isRecording == true) return
-        recordType = if (recordType == RecordType.MERGED) RecordType.STANDALONE else RecordType.MERGED
-        typeButton.text = if (recordType == RecordType.MERGED) "Merged" else "Separate"
+    private fun selectPreset(preset: ScenePreset) {
+        chips.forEachIndexed { i, c -> c.isSelected = ScenePreset.entries[i] == preset }
+        updateScene(scene.copy(preset = preset))
     }
 
     private fun toggleRecord() {
         val rec = recorders ?: return
         val gl = compositor ?: return
-        recButton.isEnabled = false
+        if (busy) return
+        busy = true
+        shutter.isEnabled = false
+        shutter.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
         if (!rec.isRecording) {
             val type = recordType
             worker.execute {
                 try {
                     val targets = rec.start(type, 0)
                     gl.startRecording(targets)
-                    ui.post { setRecordingUi(true); ui.post(timer) }
+                    ui.post { busy = false; showRecordingUi(true); ui.post(timer) }
                 } catch (t: Throwable) {
                     Log.e(TAG, "record start failed", t)
-                    ui.post { status.text = "record failed: ${t.message}"; recButton.isEnabled = true }
+                    ui.post {
+                        busy = false
+                        shutter.isEnabled = cameraReady
+                        Toast.makeText(this, "Tidak bisa mulai merekam: ${t.message}", Toast.LENGTH_LONG).show()
+                    }
                 }
             }
         } else {
             worker.execute {
-                val ok = runCatching { gl.stopRecording() }.isSuccess && rec.stop()
+                val stopped = runCatching { gl.stopRecording() }.isSuccess
+                val result = rec.stop()
                 ui.post {
-                    setRecordingUi(false)
-                    status.text = if (ok) "saved to Movies/DualVideo" else "recording failed"
-                    Toast.makeText(this, status.text, Toast.LENGTH_SHORT).show()
+                    busy = false
+                    showRecordingUi(false)
+                    ui.removeCallbacks(timer)
+                    if (stopped && result.allOk) {
+                        result.uris.firstOrNull()?.let { setThumbnail(it) }
+                        Toast.makeText(this, "Tersimpan di Movies/DualVideo", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this, "Perekaman gagal disimpan", Toast.LENGTH_LONG).show()
+                    }
                 }
             }
         }
@@ -251,19 +431,74 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 gl.setPaused(true)
                 rec.pause()
             }
-            ui.post { pauseButton.text = if (rec.isPaused) "Resume" else "Pause" }
+            ui.post {
+                pauseButton.glyph = if (rec.isPaused) Glyph.PLAY else Glyph.PAUSE
+                pauseButton.contentDescription = if (rec.isPaused) "Lanjutkan" else "Jeda"
+            }
         }
     }
 
-    private fun setRecordingUi(recording: Boolean) {
-        recButton.text = if (recording) "STOP" else "REC"
-        recButton.isEnabled = true
-        pauseButton.isEnabled = recording
-        pauseButton.text = "Pause"
-        typeButton.isEnabled = !recording
+    private fun showRecordingUi(recording: Boolean) {
+        shutter.recording = recording
+        shutter.isEnabled = cameraReady && !busy
+        typeToggle.visibility = if (recording) View.INVISIBLE else View.VISIBLE
+        timerPill.visibility = if (recording) View.VISIBLE else View.INVISIBLE
+        pauseButton.visibility = if (recording) View.VISIBLE else View.GONE
+        thumbnail.visibility = if (recording) View.GONE else View.VISIBLE
+        pauseButton.glyph = Glyph.PAUSE
+        pauseButton.contentDescription = "Jeda"
+        if (recording) timerText.text = "00:00"
     }
 
-    // ---- mini window drag (RegionHelper / PosData.updateMiniPos) ---------------------------
+    // ---- last video thumbnail -------------------------------------------------------------------------
+
+    private fun refreshThumbnail() {
+        worker.execute {
+            val args = Bundle().apply {
+                putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "${MediaStore.MediaColumns.RELATIVE_PATH}=?")
+                putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arrayOf("Movies/DualVideo/"))
+                putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, "${MediaStore.MediaColumns.DATE_ADDED} DESC")
+                putInt(ContentResolver.QUERY_ARG_LIMIT, 1)
+            }
+            val base = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            val uri = contentResolver.query(base, arrayOf(MediaStore.Video.Media._ID), args, null)?.use {
+                if (it.moveToFirst()) ContentUris.withAppendedId(base, it.getLong(0)) else null
+            }
+            if (uri != null) setThumbnail(uri)
+        }
+    }
+
+    private fun setThumbnail(uri: Uri) {
+        worker.execute {
+            val bmp: Bitmap? = try {
+                contentResolver.loadThumbnail(uri, Size(256, 256), null)
+            } catch (e: IOException) {
+                Log.w(TAG, "no thumbnail for $uri", e)
+                null
+            }
+            ui.post {
+                lastVideo = uri
+                if (bmp != null) thumbnail.setImageBitmap(bmp)
+            }
+        }
+    }
+
+    private fun openLastVideo() {
+        val uri = lastVideo
+        if (uri == null) {
+            Toast.makeText(this, "Belum ada video", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            startActivity(
+                Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+            )
+        } catch (e: android.content.ActivityNotFoundException) {
+            Toast.makeText(this, "Tidak ada aplikasi untuk membuka video", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // ---- mini window drag (RegionHelper / PosData.updateMiniPos) ----------------------------------
 
     private var dragging = false
     private var downX = 0f
