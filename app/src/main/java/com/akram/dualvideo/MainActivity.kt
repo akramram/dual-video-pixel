@@ -69,7 +69,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var mainZoom = 1f
     private var teleZoom = 4f
     private var teleLensId: String? = null
-    private var physicalZoom = false
     private var activeId: String? = null
 
     private var compositor: GlCompositor? = null
@@ -266,8 +265,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
      * (ultra-wide to main) camera. The "Tele" button turns the front camera off and gives the
      * telephoto its own slider; pressing it again brings the front camera back.
      */
-    private fun showLenses(lenses: List<Lens>, physicalZoomSupported: Boolean, cam: DualCamera) {
-        physicalZoom = physicalZoomSupported
+    private fun showLenses(lenses: List<Lens>, cam: DualCamera) {
         lensHolder.removeAllViews()
         teleMode = false
         teleSwitching = false
@@ -287,14 +285,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         teleLensId = tele.physicalId
 
         val slider = ZoomSlider(this) { z ->
-            if (teleMode) {
-                teleZoom = z
-                // In telephoto mode the stream is the tele lens itself; zoom is relative to its native view.
-                if (physicalZoom) cam.setBackZoom(z) else compositor?.mainCrop = z / teleMin
-            } else {
-                mainZoom = z
-                cam.setBackZoom(z)
-            }
+            // In tele mode the stream is the tele lens itself and the ratio is the logical zoom (min = tele native).
+            if (teleMode) teleZoom = z else mainZoom = z
+            cam.setBackZoom(z)
         }
         zoomSlider = slider
         applyZoomUi()
@@ -354,7 +347,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         status.visibility = View.VISIBLE
         if (enter) {
             compositor?.frontEnabled = false
-            compositor?.mainCrop = if (physicalZoom) 1f else teleZoom / teleMin
         }
         cam.setTele(enter, if (enter) teleZoom else mainZoom) {
             ui.post {
@@ -362,7 +354,6 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 teleSwitching = false
                 if (!enter) {
                     compositor?.frontEnabled = true
-                    compositor?.mainCrop = 1f
                 }
                 chip.isSelected = enter
                 chip.isClickable = true
@@ -456,7 +447,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         worker.execute {
             try {
                 val plan = cam.plan()
-                ui.post { showLenses(plan.lenses, plan.physicalZoom, cam) }
+                ui.post { showLenses(plan.lenses, cam) }
                 val sources = gl.start(surface, plan.specs())
                 cam.open(
                     plan, sources,

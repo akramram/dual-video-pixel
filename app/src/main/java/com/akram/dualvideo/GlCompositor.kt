@@ -65,8 +65,6 @@ class GlCompositor {
      */
     @Volatile var frontEnabled = true
 
-    /** Extra centre crop (>= 1) applied to the back camera; used for telephoto zoom when the HAL has no per-physical zoom key. */
-    @Volatile var mainCrop = 1f
     @Volatile private var recording = false
     @Volatile private var paused = false
 
@@ -276,10 +274,6 @@ class GlCompositor {
         var cy = 1f
         if (destAspect > srcAspect) cy = srcAspect / destAspect else cx = destAspect / srcAspect
         if (DualConfig.MIRROR_FRONT && s.spec.front) cx = -cx
-        if (s.spec.type == SourceType.MAIN) {
-            cx /= mainCrop
-            cy /= mainCrop
-        }
         System.arraycopy(s.matrix, 0, texMatrix, 0, 16)
         Matrix.translateM(texMatrix, 0, 0.5f, 0.5f, 0f)
         Matrix.scaleM(texMatrix, 0, cx, cy, 1f)

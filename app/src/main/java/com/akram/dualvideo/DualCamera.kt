@@ -37,8 +37,6 @@ data class CameraPlan(
     val frontSize: Size,
     /** Rear lenses sorted by focal length; empty if the back camera is not a multi-lens logical camera. */
     val lenses: List<Lens>,
-    /** Whether the logical camera accepts CONTROL_ZOOM_RATIO as a per-physical-camera request key. */
-    val physicalZoom: Boolean,
 ) {
     fun specs(): List<SourceSpec> = listOf(
         SourceSpec(SourceType.MAIN, backSize, front = false),
@@ -119,7 +117,6 @@ class DualCamera(context: Context) {
                 chooseSize(b, DualConfig.BACK_PREVIEW),
                 chooseSize(f, DualConfig.FRONT_PREVIEW),
                 lensesOf(b),
-                b.availablePhysicalCameraRequestKeys?.contains(CaptureRequest.CONTROL_ZOOM_RATIO) == true,
             )
         }
         error("no concurrent back+front camera pair on this device")
@@ -140,7 +137,7 @@ class DualCamera(context: Context) {
     fun setTele(tele: Boolean, zoom: Float, onDone: () -> Unit) {
         handler.post {
             teleId = if (tele) plan?.lenses?.lastOrNull()?.physicalId else null
-            Log.d(TAG, "tele=$tele teleId=$teleId per-physical zoom key=${plan?.physicalZoom}")
+            Log.d(TAG, "tele=$tele teleId=$teleId")
             backZoom = zoom
             closeDevices()
             openDevices(withFront = !tele, onDone)
@@ -243,12 +240,7 @@ class DualCamera(context: Context) {
                 override fun onConfigured(session: CameraCaptureSession) {
                     store(session)
                     try {
-                        val request = if (physicalId != null) {
-                            camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD, setOf(physicalId))
-                        } else {
-                            camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
-                        }
-                        val builder = request.apply {
+                        val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                             addTarget(surface)
                             set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(DualConfig.FPS, DualConfig.FPS))
                             set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
@@ -272,19 +264,14 @@ class DualCamera(context: Context) {
     }
 
     /**
-     * Zoom for the back stream. Logical camera: CONTROL_ZOOM_RATIO (the HAL picks the lens and, in a
-     * dual setup, never reaches the telephoto). Telephoto mode: the stream is bound to the tele
-     * physical camera so it cannot fall back to the main lens when zooming out; zoom is then relative
-     * to the tele lens (1.0 = its native view) through the per-physical key when the HAL offers it.
+     * Zoom for the back stream via the logical camera's CONTROL_ZOOM_RATIO. In dual mode the HAL picks
+     * the lens and never reaches the telephoto. In telephoto mode the stream is bound to the tele
+     * physical camera so it cannot fall back to the main lens; the logical ratio still zooms that stream
+     * (measured: SCALER_CROP_REGION of physical 4 shrinks 2x from 4.27x to 8.56x). The per-physical
+     * zoom key is accepted by the HAL but ignored (physical zoom stays 1.0), so it is not used.
      */
     private fun applyZoom(b: CaptureRequest.Builder) {
-        val id = teleId
-        val p = plan
-        if (id == null || p == null) {
-            b.set(CaptureRequest.CONTROL_ZOOM_RATIO, backZoom)
-        } else if (p.physicalZoom) {
-            b.setPhysicalCameraKey(CaptureRequest.CONTROL_ZOOM_RATIO, backZoom / p.lenses.last().ratio, id)
-        }
+        b.set(CaptureRequest.CONTROL_ZOOM_RATIO, backZoom)
     }
 
     /**
