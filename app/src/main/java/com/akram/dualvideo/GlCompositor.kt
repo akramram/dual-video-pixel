@@ -58,6 +58,15 @@ class GlCompositor {
     private val handler = Handler(thread.looper)
 
     @Volatile var scene: Scene = Scene()
+
+    /**
+     * False while the front camera is off (telephoto mode): the composite shows the back camera
+     * full-frame. A separate front recorder (2 files) keeps receiving the front's last frame.
+     */
+    @Volatile var frontEnabled = true
+
+    /** Extra centre crop (>= 1) applied to the back camera; used for telephoto zoom when the HAL has no per-physical zoom key. */
+    @Volatile var mainCrop = 1f
     @Volatile private var recording = false
     @Volatile private var paused = false
 
@@ -213,7 +222,15 @@ class GlCompositor {
         }
     }
 
-    private fun composite(scene: Scene, w: Int, h: Int): List<Pair<Source, Rect>> =
+    private fun composite(scene: Scene, w: Int, h: Int): List<Pair<Source, Rect>> {
+        if (!frontEnabled) {
+            val main = sources[SourceType.MAIN]?.takeIf { it.hasFrame } ?: return emptyList()
+            return listOf(main to Rect(0, 0, w, h))
+        }
+        return compositeDual(scene, w, h)
+    }
+
+    private fun compositeDual(scene: Scene, w: Int, h: Int): List<Pair<Source, Rect>> =
         SceneLayout.drawOrder(scene).mapNotNull { type ->
             val s = sources[type]?.takeIf { it.hasFrame } ?: return@mapNotNull null
             s to SceneLayout.rectFor(scene.layoutOf(type), w, h, scene.miniX, scene.miniY)
@@ -259,6 +276,10 @@ class GlCompositor {
         var cy = 1f
         if (destAspect > srcAspect) cy = srcAspect / destAspect else cx = destAspect / srcAspect
         if (DualConfig.MIRROR_FRONT && s.spec.front) cx = -cx
+        if (s.spec.type == SourceType.MAIN) {
+            cx /= mainCrop
+            cy /= mainCrop
+        }
         System.arraycopy(s.matrix, 0, texMatrix, 0, 16)
         Matrix.translateM(texMatrix, 0, 0.5f, 0.5f, 0f)
         Matrix.scaleM(texMatrix, 0, cx, cy, 1f)

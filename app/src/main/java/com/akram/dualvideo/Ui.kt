@@ -9,12 +9,16 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewOutlineProvider
 import android.view.animation.DecelerateInterpolator
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import kotlin.math.abs
+import kotlin.math.ln
+import kotlin.math.exp
 import kotlin.math.min
 
 fun Context.dp(v: Float): Float = v * resources.displayMetrics.density
@@ -37,7 +41,7 @@ fun pill(color: Int, radiusDp: Float, ctx: Context) = GradientDrawable().apply {
     cornerRadius = ctx.dp(radiusDp)
 }
 
-enum class Glyph { SWAP, PAUSE, PLAY, SPLIT, STACK, PIP }
+enum class Glyph { SWAP, PAUSE, PLAY, SPLIT, STACK, PIP, TELE }
 
 private val glyphPath = Path()
 
@@ -84,6 +88,15 @@ fun drawGlyph(c: Canvas, g: Glyph, r: RectF, p: Paint, stroke: Float) {
             c.drawRoundRect(r.left + w * 0.18f, r.top, r.left + w * 0.18f + bw, r.bottom, bw / 3, bw / 3, p)
             c.drawRoundRect(r.right - w * 0.18f - bw, r.top, r.right - w * 0.18f, r.bottom, bw / 3, bw / 3, p)
         }
+        Glyph.TELE -> {
+            val cx = r.left + w * 0.42f
+            val cy = r.top + h * 0.42f
+            val rad = w * 0.32f
+            c.drawCircle(cx, cy, rad, p)
+            c.drawLine(cx + rad * 0.72f, cy + rad * 0.72f, r.right - inset, r.bottom - inset, p)
+            c.drawLine(cx - rad * 0.45f, cy, cx + rad * 0.45f, cy, p)
+            c.drawLine(cx, cy - rad * 0.45f, cx, cy + rad * 0.45f, p)
+        }
         Glyph.PLAY -> {
             p.style = Paint.Style.FILL
             glyphPath.rewind()
@@ -93,6 +106,130 @@ fun drawGlyph(c: Canvas, g: Glyph, r: RectF, p: Paint, stroke: Float) {
             glyphPath.close()
             c.drawPath(glyphPath, p)
         }
+    }
+}
+
+/**
+ * Continuous zoom slider on a log scale between [minZoom] and [maxZoom] (zoom ratios feel linear on
+ * a log scale). Dragging reports every move; tapping the track animates to the tapped value.
+ */
+class ZoomSlider(context: Context, private val onChange: (Float) -> Unit) : View(context) {
+    var minZoom = 1f
+        private set
+    var maxZoom = 4f
+        private set
+    var zoom = 1f
+        private set
+    private var stops: List<Float> = emptyList()
+    private val bg = pill(Palette.SCRIM, 24f, context)
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Palette.WHITE; textSize = context.dp(15f); typeface = android.graphics.Typeface.DEFAULT_BOLD; textAlign = Paint.Align.LEFT
+    }
+    private val track = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x80FFFFFF.toInt(); strokeWidth = context.dp(3f); strokeCap = Paint.Cap.ROUND }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Palette.WHITE; strokeWidth = context.dp(3f); strokeCap = Paint.Cap.ROUND }
+    private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Palette.WHITE }
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = Palette.WHITE; strokeWidth = context.dp(2f) }
+    private var anim: ValueAnimator? = null
+    private var dragging = false
+
+    init {
+        isClickable = true
+        isFocusable = true
+        contentDescription = "Zoom"
+    }
+
+    /** Sets the range and current value; [stopMarks] are drawn as small marks on the track. */
+    fun configure(min: Float, max: Float, value: Float, stopMarks: List<Float>, description: String) {
+        anim?.cancel()
+        minZoom = min
+        maxZoom = max
+        zoom = value.coerceIn(min, max)
+        stops = stopMarks.filter { it > min && it < max }
+        contentDescription = description
+        invalidate()
+    }
+
+    override fun onMeasure(w: Int, h: Int) {
+        setMeasuredDimension(context.dpi(250f), context.dpi(48f))
+    }
+
+    private val labelWidth get() = context.dp(58f)
+    private val trackLeft get() = labelWidth
+    private val trackRight get() = width - context.dp(20f)
+
+    private fun xFor(z: Float) = trackLeft + (ln(z / minZoom) / ln(maxZoom / minZoom)) * (trackRight - trackLeft)
+    private fun zoomFor(x: Float): Float {
+        val t = ((x - trackLeft) / (trackRight - trackLeft)).coerceIn(0f, 1f)
+        return minZoom * exp(t * ln(maxZoom / minZoom))
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        bg.setBounds(0, 0, width, height)
+        bg.draw(canvas)
+        val cy = height / 2f
+        canvas.drawText(zoomLabel(zoom), context.dp(18f), cy - (text.ascent() + text.descent()) / 2, text)
+        canvas.drawLine(trackLeft, cy, trackRight, cy, track)
+        for (s in stops) canvas.drawCircle(xFor(s), cy, context.dp(2.5f), dot)
+        val tx = xFor(zoom)
+        canvas.drawLine(trackLeft, cy, tx, cy, fill)
+        canvas.drawCircle(tx, cy, context.dp(11f), dot)
+        if (isFocused) canvas.drawCircle(tx, cy, context.dp(15f), ring)
+    }
+
+    private fun zoomLabel(z: Float) = if (z >= 10f) "%.0f×".format(z) else "%.1f×".format(z)
+
+    private fun set(value: Float, notify: Boolean) {
+        val v = value.coerceIn(minZoom, maxZoom)
+        if (v == zoom) return
+        zoom = v
+        invalidate()
+        if (notify) onChange(v)
+    }
+
+    override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (!isEnabled) return false
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                anim?.cancel()
+                dragging = abs(e.x - xFor(zoom)) <= context.dp(28f)
+                if (!dragging) animateTo(zoomFor(e.x))
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> if (dragging) set(zoomFor(e.x), true)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> dragging = false
+        }
+        return true
+    }
+
+    private fun animateTo(target: Float) {
+        val from = zoom
+        anim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 180
+            interpolator = DecelerateInterpolator()
+            addUpdateListener {
+                val t = it.animatedValue as Float
+                set(from * exp(t * ln(target / from)), true)
+            }
+            start()
+        }
+    }
+
+    override fun onInitializeAccessibilityNodeInfo(info: android.view.accessibility.AccessibilityNodeInfo) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD)
+        info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD)
+        info.stateDescription = zoomLabel(zoom)
+    }
+
+    override fun performAccessibilityAction(action: Int, args: android.os.Bundle?): Boolean {
+        val step = when (action) {
+            android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> 1.15f
+            android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> 1 / 1.15f
+            else -> return super.performAccessibilityAction(action, args)
+        }
+        set(zoom * step, true)
+        return true
     }
 }
 

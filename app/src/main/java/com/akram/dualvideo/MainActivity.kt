@@ -58,6 +58,19 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private lateinit var pauseButton: GlyphButton
     private lateinit var swapButton: GlyphButton
     private lateinit var lensHolder: FrameLayout
+    private var zoomSlider: ZoomSlider? = null
+    private var teleChip: GlyphChip? = null
+    private var teleStatus: TextView? = null
+    private var teleMode = false
+    private var teleSwitching = false
+    private var mainMin = 0.7f
+    private var mainMax = 4f
+    private var teleMin = 4f
+    private var mainZoom = 1f
+    private var teleZoom = 4f
+    private var teleLensId: String? = null
+    private var physicalZoom = false
+    private var activeId: String? = null
 
     private var compositor: GlCompositor? = null
     private var camera: DualCamera? = null
@@ -108,7 +121,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         surfaceView.setOnTouchListener(::onPreviewTouch)
         root.addView(surfaceView)
         lensHolder = FrameLayout(this)
-        root.addView(lensHolder, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        root.addView(lensHolder, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(100f), Gravity.TOP))
 
         // Top overlay: 1 file / 2 file switch when idle, timer while recording.
         typeToggle = SegmentedToggle(
@@ -241,24 +254,123 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun positionLens() {
         val bottom = minOf(surfaceView.layoutParams.height, panel.top.takeIf { it > 0 } ?: Int.MAX_VALUE)
         val lp = lensHolder.layoutParams as FrameLayout.LayoutParams
-        val top = bottom - dpi(60f)
+        val top = bottom - dpi(112f)
         if (lp.topMargin != top) {
             lp.topMargin = top
             lensHolder.layoutParams = lp
         }
     }
 
-    /** Rear lens switch (e.g. 0.7× / 1× / 4×) shown over the bottom of the viewfinder. */
-    private fun showLenses(lenses: List<Lens>, cam: DualCamera) {
+    /**
+     * Rear zoom controls over the bottom of the viewfinder. The slider always drives the main
+     * (ultra-wide to main) camera. The "Tele" button turns the front camera off and gives the
+     * telephoto its own slider; pressing it again brings the front camera back.
+     */
+    private fun showLenses(lenses: List<Lens>, physicalZoomSupported: Boolean, cam: DualCamera) {
+        physicalZoom = physicalZoomSupported
         lensHolder.removeAllViews()
+        teleMode = false
+        teleSwitching = false
+        compositor?.frontEnabled = true
+        cam.onActivePhysical = null
+        teleChip = null
+        teleStatus = null
+        zoomSlider = null
         if (lenses.size < 2) return
-        val toggle = SegmentedToggle(
-            this, lenses.map { it.label },
-            lenses.map { "Lensa belakang ${it.label}" },
-        ) { cam.setBackZoom(lenses[it].ratio) }
-        // The back camera starts at zoom 1.0 (main lens); select the lens closest to it.
-        toggle.select(lenses.indices.minBy { kotlin.math.abs(lenses[it].ratio - 1f) }, notify = false)
-        lensHolder.addView(toggle)
+        val hasTele = lenses.size >= 3
+        val tele = lenses.last()
+        mainMin = lenses.first().ratio
+        mainMax = tele.ratio
+        teleMin = tele.ratio
+        mainZoom = 1f
+        teleZoom = tele.ratio
+        teleLensId = tele.physicalId
+
+        val slider = ZoomSlider(this) { z ->
+            if (teleMode) {
+                teleZoom = z
+                // In telephoto mode the stream is the tele lens itself; zoom is relative to its native view.
+                if (physicalZoom) cam.setBackZoom(z) else compositor?.mainCrop = z / teleMin
+            } else {
+                mainZoom = z
+                cam.setBackZoom(z)
+            }
+        }
+        zoomSlider = slider
+        applyZoomUi()
+
+        val status = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 13f; gravity = Gravity.CENTER
+            background = pill(Palette.SCRIM, 14f, this@MainActivity)
+            setPadding(dpi(12f), dpi(6f), dpi(12f), dpi(6f))
+            visibility = View.GONE
+        }
+        teleStatus = status
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(slider)
+            if (hasTele) {
+                val chip = GlyphChip(this@MainActivity, Glyph.TELE, "Tele").apply {
+                    contentDescription = "Lensa tele, mematikan kamera depan sementara"
+                    setOnClickListener { toggleTele(cam) }
+                }
+                teleChip = chip
+                addView(chip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { leftMargin = dpi(8f) })
+            }
+        }
+        if (hasTele) {
+            cam.onActivePhysical = { id -> ui.post { activeId = id; refreshTeleStatus() } }
+        }
+        lensHolder.addView(row, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
+        lensHolder.addView(status, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dpi(56f) })
+    }
+
+    private fun applyZoomUi() {
+        val s = zoomSlider ?: return
+        if (teleMode) s.configure(teleMin, TELE_MAX, teleZoom, listOf(6f, 8f), "Zoom lensa tele")
+        else s.configure(mainMin, mainMax, mainZoom, listOf(1f, 2f), "Zoom kamera utama")
+    }
+
+    /** Shows whether the telephoto is really in use; below the HAL's switch point (or in low light) the picture is a crop of the main lens. */
+    private fun refreshTeleStatus() {
+        val status = teleStatus ?: return
+        if (!teleMode || teleSwitching) return
+        status.text = if (activeId == teleLensId) "Lensa tele aktif" else "Lensa tele tidak aktif (lensa $activeId)"
+        status.visibility = View.VISIBLE
+    }
+
+    private fun toggleTele(cam: DualCamera) {
+        if (teleSwitching) return
+        val slider = zoomSlider ?: return
+        val chip = teleChip ?: return
+        val status = teleStatus ?: return
+        val enter = !teleMode
+        teleSwitching = true
+        chip.isClickable = false
+        slider.isEnabled = false
+        status.text = if (enter) "Mematikan kamera depan…" else "Menyalakan kamera depan…"
+        status.visibility = View.VISIBLE
+        if (enter) {
+            compositor?.frontEnabled = false
+            compositor?.mainCrop = if (physicalZoom) 1f else teleZoom / teleMin
+        }
+        cam.setTele(enter, if (enter) teleZoom else mainZoom) {
+            ui.post {
+                teleMode = enter
+                teleSwitching = false
+                if (!enter) {
+                    compositor?.frontEnabled = true
+                    compositor?.mainCrop = 1f
+                }
+                chip.isSelected = enter
+                chip.isClickable = true
+                slider.isEnabled = true
+                applyZoomUi()
+                if (enter) refreshTeleStatus() else status.visibility = View.GONE
+            }
+        }
     }
 
     private fun showMessage(text: String, actionLabel: String? = null, action: (() -> Unit)? = null) {
@@ -344,7 +456,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         worker.execute {
             try {
                 val plan = cam.plan()
-                ui.post { showLenses(plan.lenses, cam) }
+                ui.post { showLenses(plan.lenses, plan.physicalZoom, cam) }
                 val sources = gl.start(surface, plan.specs())
                 cam.open(
                     plan, sources,
@@ -576,5 +688,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     companion object {
         private const val TAG = "DualVideo"
         private const val REQ_PERMS = 1
+        /** Upper end of the telephoto slider (the logical camera allows up to 20x; beyond this the image is mostly digital). */
+        private const val TELE_MAX = 10f
     }
 }

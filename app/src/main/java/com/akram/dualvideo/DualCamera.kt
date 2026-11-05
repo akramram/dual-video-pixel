@@ -19,13 +19,15 @@ import android.util.Range
 import android.util.Size
 import android.view.Surface
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 
 /**
- * A rear lens expressed as a zoom ratio of the logical back camera (1.0 = main lens). The HAL picks
- * the physical lens for the ratio; see [DualCamera] for what is reachable while the front camera is open.
+ * A rear lens expressed as a zoom ratio of the logical back camera (1.0 = main lens);
+ * [physicalId] is the physical camera the HAL reports in LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID
+ * when that lens is in use.
  */
-data class Lens(val ratio: Float, val label: String)
+data class Lens(val ratio: Float, val label: String, val physicalId: String)
 
 /** A concurrently openable back/front pair and the stream sizes chosen for each. */
 data class CameraPlan(
@@ -35,6 +37,8 @@ data class CameraPlan(
     val frontSize: Size,
     /** Rear lenses sorted by focal length; empty if the back camera is not a multi-lens logical camera. */
     val lenses: List<Lens>,
+    /** Whether the logical camera accepts CONTROL_ZOOM_RATIO as a per-physical-camera request key. */
+    val physicalZoom: Boolean,
 ) {
     fun specs(): List<SourceSpec> = listOf(
         SourceSpec(SourceType.MAIN, backSize, front = false),
@@ -50,11 +54,13 @@ data class CameraPlan(
  * Deviation: Xiaomi picks vendor session operation modes (32784 / 32772 / VIDEO_BEAUTY); a Pixel
  * has no such modes, so plain regular sessions on a concurrent-camera pair are used.
  *
- * Rear lens switching is not in the analysed Xiaomi code path; it sets CONTROL_ZOOM_RATIO on the
- * logical back camera. On the Pixel 6 Pro with the front camera open, the ultra-wide is reached
- * (active physical camera 3) but the telephoto never is: ratios 3x to 10x stay on the main lens
- * (physical 2, a digital crop). Binding the stream to a physical camera is rejected by the HAL
- * ("Concurrent streaming 3p logical rear camera app with physical stream is unsupported").
+ * Rear zoom/lens is not in the analysed Xiaomi code path; it sets CONTROL_ZOOM_RATIO on the
+ * logical back camera. On the Pixel 6 Pro with the front camera open the HAL reaches the
+ * ultra-wide (physical 3) and main lens (physical 2) but never the telephoto (physical 4): ratios
+ * 3x to 10x stay on the main lens as a digital crop, and binding a stream to a physical camera is
+ * rejected ("Concurrent streaming 3p logical rear camera app with physical stream is
+ * unsupported"). With only the back camera open the telephoto does engage at high zoom, so
+ * [setTele] closes the front camera and reopens the back camera alone.
  */
 class DualCamera(context: Context) {
     private val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -62,13 +68,24 @@ class DualCamera(context: Context) {
     private val handler = Handler(thread.looper)
     private val executor = Executor { handler.post(it) }
 
+    private var plan: CameraPlan? = null
+    private var surfaces: Map<SourceType, Surface> = emptyMap()
+    private var onError: (String) -> Unit = {}
+
     private var back: CameraDevice? = null
     private var front: CameraDevice? = null
     private var backSession: CameraCaptureSession? = null
     private var frontSession: CameraCaptureSession? = null
-    private var lastPhysicalId: String? = null
     private var backBuilder: CaptureRequest.Builder? = null
     @Volatile private var backZoom = 1f
+
+    /** Physical camera the back stream is bound to in telephoto mode; null = logical camera (HAL picks the lens). */
+    @Volatile private var teleId: String? = null
+    private val zoomPosted = AtomicBoolean(false)
+    private var lastPhysicalId: String? = null
+
+    /** Called (on the camera thread) when the rear camera's active physical lens changes. */
+    @Volatile var onActivePhysical: ((String?) -> Unit)? = null
 
     private val backCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
@@ -76,6 +93,7 @@ class DualCamera(context: Context) {
             if (id != lastPhysicalId) {
                 lastPhysicalId = id
                 Log.d(TAG, "active rear physical camera: $id")
+                onActivePhysical?.invoke(id)
             }
         }
     }
@@ -101,30 +119,85 @@ class DualCamera(context: Context) {
                 chooseSize(b, DualConfig.BACK_PREVIEW),
                 chooseSize(f, DualConfig.FRONT_PREVIEW),
                 lensesOf(b),
+                b.availablePhysicalCameraRequestKeys?.contains(CaptureRequest.CONTROL_ZOOM_RATIO) == true,
             )
         }
         error("no concurrent back+front camera pair on this device")
     }
 
-    @SuppressLint("MissingPermission")
     fun open(plan: CameraPlan, surfaces: Map<SourceType, Surface>, onReady: () -> Unit, onError: (String) -> Unit) {
-        var remaining = 2
-        val fail = { msg: String -> onError(msg) }
+        this.plan = plan
+        this.surfaces = surfaces
+        this.onError = onError
+        openDevices(withFront = true, onReady)
+    }
+
+    /**
+     * Switches between the dual setup (back + front) and telephoto mode (back only, at [zoom]).
+     * Both cameras are closed and the needed ones reopened onto the same surfaces, so the stream
+     * pauses for about a second; [onDone] runs once every opened camera is streaming again.
+     */
+    fun setTele(tele: Boolean, zoom: Float, onDone: () -> Unit) {
+        handler.post {
+            teleId = if (tele) plan?.lenses?.lastOrNull()?.physicalId else null
+            backZoom = zoom
+            closeDevices()
+            openDevices(withFront = !tele, onDone)
+        }
+    }
+
+    /** Zooms the rear camera to [ratio]; takes effect on the next frame, no session restart. Safe to call at touch rate. */
+    fun setBackZoom(ratio: Float) {
+        backZoom = ratio
+        if (zoomPosted.getAndSet(true)) return
+        handler.post {
+            zoomPosted.set(false)
+            val b = backBuilder ?: return@post
+            val s = backSession ?: return@post
+            runCatching {
+                applyZoom(b)
+                s.setRepeatingRequest(b.build(), backCallback, handler)
+            }.onFailure { Log.w(TAG, "zoom failed", it) }
+        }
+    }
+
+    fun close() {
+        closeDevices()
+        thread.quitSafely()
+    }
+
+    private fun closeDevices() {
+        runCatching { backSession?.close() }
+        runCatching { frontSession?.close() }
+        runCatching { back?.close() }
+        runCatching { front?.close() }
+        backSession = null; frontSession = null; back = null; front = null; backBuilder = null
+        lastPhysicalId = null
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openDevices(withFront: Boolean, onReady: () -> Unit) {
+        val plan = plan ?: return
+        var remaining = if (withFront) 2 else 1
         val oneReady = {
             val left = synchronized(this) { --remaining }
             if (left == 0) onReady()
         }
+        val fail = { msg: String -> onError(msg) }
         openOne(
-            plan.backId, surfaces.getValue(SourceType.MAIN), { d, s -> back = d; backSession = s },
-            { backBuilder = it; it.set(CaptureRequest.CONTROL_ZOOM_RATIO, backZoom) }, backCallback, oneReady, fail,
+            plan.backId, surfaces.getValue(SourceType.MAIN), teleId, { d, s -> back = d; backSession = s },
+            { backBuilder = it; applyZoom(it) }, backCallback, oneReady, fail,
         )
-        openOne(plan.frontId, surfaces.getValue(SourceType.SUB), { d, s -> front = d; frontSession = s }, {}, null, oneReady, fail)
+        if (withFront) {
+            openOne(plan.frontId, surfaces.getValue(SourceType.SUB), null, { d, s -> front = d; frontSession = s }, {}, null, oneReady, fail)
+        }
     }
 
     @SuppressLint("MissingPermission")
     private fun openOne(
         id: String,
         surface: Surface,
+        physicalId: String?,
         store: (CameraDevice, CameraCaptureSession?) -> Unit,
         tune: (CaptureRequest.Builder) -> Unit,
         callback: CameraCaptureSession.CaptureCallback?,
@@ -134,7 +207,7 @@ class DualCamera(context: Context) {
         manager.openCamera(id, executor, object : CameraDevice.StateCallback() {
             override fun onOpened(camera: CameraDevice) {
                 store(camera, null)
-                createSession(camera, id, surface, tune, { store(camera, it) }, callback, ready, fail)
+                createSession(camera, id, surface, physicalId, tune, { store(camera, it) }, callback, ready, fail)
             }
 
             override fun onDisconnected(camera: CameraDevice) {
@@ -154,16 +227,16 @@ class DualCamera(context: Context) {
         camera: CameraDevice,
         id: String,
         surface: Surface,
+        physicalId: String?,
         tune: (CaptureRequest.Builder) -> Unit,
         store: (CameraCaptureSession) -> Unit,
         callback: CameraCaptureSession.CaptureCallback?,
         ready: () -> Unit,
         fail: (String) -> Unit,
     ) {
-        val output = OutputConfiguration(surface)
         val cfg = SessionConfiguration(
             SessionConfiguration.SESSION_REGULAR,
-            listOf(output),
+            listOf(OutputConfiguration(surface).apply { if (physicalId != null) setPhysicalCameraId(physicalId) }),
             executor,
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
@@ -192,26 +265,20 @@ class DualCamera(context: Context) {
         }
     }
 
-    /** Zooms the rear camera to [ratio]; takes effect on the next frame (no session restart). */
-    fun setBackZoom(ratio: Float) {
-        backZoom = ratio
-        handler.post {
-            val b = backBuilder ?: return@post
-            val s = backSession ?: return@post
-            runCatching {
-                b.set(CaptureRequest.CONTROL_ZOOM_RATIO, ratio)
-                s.setRepeatingRequest(b.build(), backCallback, handler)
-            }.onFailure { Log.w(TAG, "zoom $ratio failed", it) }
+    /**
+     * Zoom for the back stream. Logical camera: CONTROL_ZOOM_RATIO (the HAL picks the lens and, in a
+     * dual setup, never reaches the telephoto). Telephoto mode: the stream is bound to the tele
+     * physical camera so it cannot fall back to the main lens when zooming out; zoom is then relative
+     * to the tele lens (1.0 = its native view) through the per-physical key when the HAL offers it.
+     */
+    private fun applyZoom(b: CaptureRequest.Builder) {
+        val id = teleId
+        val p = plan
+        if (id == null || p == null) {
+            b.set(CaptureRequest.CONTROL_ZOOM_RATIO, backZoom)
+        } else if (p.physicalZoom) {
+            b.setPhysicalCameraKey(CaptureRequest.CONTROL_ZOOM_RATIO, backZoom / p.lenses.last().ratio, id)
         }
-    }
-
-    fun close() {
-        runCatching { backSession?.close() }
-        runCatching { frontSession?.close() }
-        runCatching { back?.close() }
-        runCatching { front?.close() }
-        backSession = null; frontSession = null; back = null; front = null
-        thread.quitSafely()
     }
 
     /**
@@ -220,17 +287,20 @@ class DualCamera(context: Context) {
      */
     private fun lensesOf(c: CameraCharacteristics): List<Lens> {
         val range = c.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) ?: return emptyList()
-        val equiv = c.physicalCameraIds.mapNotNull { id ->
+        val lenses = c.physicalCameraIds.mapNotNull { id ->
             runCatching {
                 val pc = manager.getCameraCharacteristics(id)
                 val focal = pc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
                 val width = pc.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)?.width
-                if (focal != null && width != null) focal / width else null
+                if (focal != null && width != null) id to focal / width else null
             }.getOrNull()
-        }.sorted()
-        if (equiv.size < 2) return emptyList()
-        val main = equiv[(equiv.size - 1) / 2]
-        return equiv.map { (it / main).coerceIn(range.lower, range.upper) }.distinct().map { Lens(it, lensLabel(it)) }
+        }.sortedBy { it.second }
+        if (lenses.size < 2) return emptyList()
+        val main = lenses[(lenses.size - 1) / 2].second
+        return lenses.map { (id, equiv) ->
+            val ratio = (equiv / main).coerceIn(range.lower, range.upper)
+            Lens(ratio, lensLabel(ratio), id)
+        }
     }
 
     private fun lensLabel(r: Float): String {
