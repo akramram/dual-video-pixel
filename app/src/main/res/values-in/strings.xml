@@ -7,6 +7,7 @@
     <string name="record_one_file_desc">Rekam jadi satu file gabungan</string>
     <string name="record_two_files_desc">Rekam jadi dua file terpisah, satu per kamera</string>
     <string name="paused">Dijeda</string>
+    <string name="thermal_warning">Ponsel panas. Kualitas rekaman bisa turun.</string>
 
     <string name="layout_split">Bagi</string>
     <string name="layout_stack">Tumpuk</string>

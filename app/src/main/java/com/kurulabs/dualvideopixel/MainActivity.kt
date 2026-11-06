@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
@@ -44,6 +45,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private lateinit var surfaceView: SurfaceView
     private lateinit var topBar: FrameLayout
+    private lateinit var thermalPill: TextView
     private lateinit var panel: LinearLayout
     private lateinit var typeToggle: SegmentedToggle
     private lateinit var timerPill: LinearLayout
@@ -116,6 +118,22 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onResume() {
         super.onResume()
         refreshThumbnail()
+        val pm = getSystemService(PowerManager::class.java)
+        onThermalStatus(pm.currentThermalStatus)
+        pm.addThermalStatusListener(mainExecutor, thermalListener)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        getSystemService(PowerManager::class.java).removeThermalStatusListener(thermalListener)
+    }
+
+    /** Hot phones throttle the CPU and the camera HAL; on a Pixel 5 audio was seen to be cut short once status reached critical. */
+    private val thermalListener = PowerManager.OnThermalStatusChangedListener { onThermalStatus(it) }
+
+    private fun onThermalStatus(status: Int) {
+        Log.i(TAG, "thermal status $status")
+        thermalPill.visibility = if (status >= PowerManager.THERMAL_STATUS_MODERATE) View.VISIBLE else View.GONE
     }
 
     // ---- UI construction ----------------------------------------------------------------------
@@ -187,6 +205,17 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         root.addView(messageBox, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply {
             leftMargin = dpi(24f); rightMargin = dpi(24f)
         })
+
+        // Warning while the phone is hot; see thermalListener.
+        thermalPill = TextView(this).apply {
+            setTextColor(Color.WHITE); textSize = 13f; gravity = Gravity.CENTER
+            background = pill(Palette.SCRIM, 14f, this@MainActivity)
+            setPadding(dpi(12f), dpi(6f), dpi(12f), dpi(6f))
+            text = getString(R.string.thermal_warning)
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            visibility = View.GONE
+        }
+        root.addView(thermalPill, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dpi(124f) })
 
         // Bottom panel: layout chips, then thumbnail / shutter / swap.
         val presets = listOf(
