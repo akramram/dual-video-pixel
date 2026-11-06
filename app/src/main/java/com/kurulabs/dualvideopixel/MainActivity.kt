@@ -93,7 +93,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             val r = recorders ?: return
             if (!r.isRecording) return
             val s = r.elapsedMs() / 1000
-            timerText.text = "%02d:%02d%s".format(s / 60, s % 60, if (r.isPaused) "  ·  Dijeda" else "")
+            timerText.text = "%02d:%02d%s".format(s / 60, s % 60, if (r.isPaused) "  ·  " + getString(R.string.paused) else "")
             (timerDot.background as android.graphics.drawable.GradientDrawable).setColor(if (r.isPaused) Palette.WHITE else Palette.RED)
             ui.postDelayed(this, 250)
         }
@@ -102,13 +102,13 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setDecorFitsSystemWindows(false)
+        settings = loadSettings()
+        activeSettings = settings
+        buildUi()
         window.insetsController?.setSystemBarsAppearance(
             0,
             WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
         )
-        settings = loadSettings()
-        activeSettings = settings
-        buildUi()
         if (!hasPermissions()) requestPerms()
     }
 

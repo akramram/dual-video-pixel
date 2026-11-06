@@ -6,6 +6,7 @@
     <string name="record_two_files">2 files</string>
     <string name="record_one_file_desc">Record one combined file</string>
     <string name="record_two_files_desc">Record two separate files, one per camera</string>
+    <string name="paused">Paused</string>
 
     <string name="layout_split">Split</string>
     <string name="layout_stack">Stack</string>

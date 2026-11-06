@@ -193,12 +193,19 @@ class DualCamera(context: Context) {
             if (left == 0) onReady()
         }
         val fail = { msg: String -> onError(msg) }
+        // Some HALs (Pixel 5) reject a concurrent open if any session is already configured,
+        // so sessions start only once every camera of the pair is open.
+        val starters = mutableListOf<() -> Unit>()
+        val opened = { start: () -> Unit ->
+            val all = synchronized(this) { starters.add(start); starters.size == (if (withFront) 2 else 1) }
+            if (all) starters.forEach { it() }
+        }
         openOne(
             plan.backId, surfaces.getValue(SourceType.MAIN), teleId, { d, s -> back = d; backSession = s },
-            { backBuilder = it; applyZoom(it) }, backCallback, oneReady, fail,
+            { backBuilder = it; applyZoom(it) }, backCallback, oneReady, fail, opened,
         )
         if (withFront) {
-            openOne(plan.frontId, surfaces.getValue(SourceType.SUB), null, { d, s -> front = d; frontSession = s }, {}, null, oneReady, fail)
+            openOne(plan.frontId, surfaces.getValue(SourceType.SUB), null, { d, s -> front = d; frontSession = s }, {}, null, oneReady, fail, opened)
         }
     }
 
@@ -212,11 +219,12 @@ class DualCamera(context: Context) {
         callback: CameraCaptureSession.CaptureCallback?,
         ready: () -> Unit,
         fail: (String) -> Unit,
+        opened: (() -> Unit) -> Unit,
     ) {
         manager.openCamera(id, executor, object : CameraDevice.StateCallback() {
             override fun onOpened(camera: CameraDevice) {
                 store(camera, null)
-                createSession(camera, id, surface, physicalId, tune, { store(camera, it) }, callback, ready, fail)
+                opened { createSession(camera, id, surface, physicalId, tune, { store(camera, it) }, callback, ready, fail) }
             }
 
             override fun onDisconnected(camera: CameraDevice) {
