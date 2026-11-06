@@ -46,7 +46,7 @@ Scope: only the dual-camera (dual video) feature of `com.android.camera` 4.5.002
 
 ## Verified on the Pixel 6 Pro (Android 17)
 
-- Both cameras open at once: `dumpsys media.camera` shows Device 0 and Device 1 held by `com.akram.dualvideo`.
+- Both cameras open at once: `dumpsys media.camera` shows Device 0 and Device 1 held by `com.kurulabs.dualvideopixel`.
 - Preview (screenshots over adb): Split, Stack (two centred tiles), Swap (exchanges the two tiles), PiP, dragging the mini window, tapping the mini window to swap.
 - A recorded MERGED frame (Split) shows the same composition as the preview. Stack/PiP were not compared frame-by-frame in recordings.
 - MERGED: one MP4, 1080x1920 H.264 + AAC, composite of both cameras, pause/resume leaves no PTS gap.

@@ -1,4 +1,4 @@
-package com.akram.dualvideo
+package com.kurulabs.dualvideopixel
 
 import android.content.ContentResolver
 import android.content.ContentValues

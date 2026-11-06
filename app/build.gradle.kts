@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "com.akram.dualvideo"
+    namespace = "com.kurulabs.dualvideopixel"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -11,7 +11,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.akram.dualvideo"
+        applicationId = "com.kurulabs.dualvideopixel"
         // concurrent camera IDs (getConcurrentCameraIds) need API 30
         minSdk = 30
         targetSdk = 36
