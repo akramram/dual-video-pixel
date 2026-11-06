@@ -131,8 +131,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
         // Top overlay: 1 file / 2 file switch when idle, timer while recording.
         typeToggle = SegmentedToggle(
-            this, listOf("1 file", "2 file"),
-            listOf("Rekam jadi satu file gabungan", "Rekam jadi dua file terpisah, satu per kamera"),
+            this, listOf(getString(R.string.record_one_file), getString(R.string.record_two_files)),
+            listOf(getString(R.string.record_one_file_desc), getString(R.string.record_two_files_desc)),
         ) { recordType = if (it == 0) RecordType.MERGED else RecordType.STANDALONE }
         timerDot = View(this).apply { background = pill(Palette.RED, 5f, this@MainActivity) }
         timerText = TextView(this).apply { setTextColor(Color.WHITE); textSize = 16f; typeface = android.graphics.Typeface.DEFAULT_BOLD; text = "00:00" }
@@ -189,9 +189,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
         // Bottom panel: layout chips, then thumbnail / shutter / swap.
         val presets = listOf(
-            Triple(ScenePreset.SPLIT, Glyph.SPLIT, "Bagi"),
-            Triple(ScenePreset.STACK, Glyph.STACK, "Tumpuk"),
-            Triple(ScenePreset.PIP, Glyph.PIP, "PiP"),
+            Triple(ScenePreset.SPLIT, Glyph.SPLIT, getString(R.string.layout_split)),
+            Triple(ScenePreset.STACK, Glyph.STACK, getString(R.string.layout_stack)),
+            Triple(ScenePreset.PIP, Glyph.PIP, getString(R.string.layout_pip)),
         )
         chips = presets.map { (preset, glyph, label) ->
             GlyphChip(this, glyph, label).also { chip ->
@@ -208,8 +208,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
         shutter = ShutterView(this).apply { isEnabled = false; setOnClickListener { toggleRecord() } }
         thumbnail = ThumbnailView(this).apply { setOnClickListener { openLastVideo() } }
-        pauseButton = GlyphButton(this, Glyph.PAUSE, "Jeda").apply { visibility = View.GONE; setOnClickListener { togglePause() } }
-        swapButton = GlyphButton(this, Glyph.SWAP, "Tukar posisi kamera").apply { setOnClickListener { updateScene(scene.copy(swapped = !scene.swapped)) } }
+        pauseButton = GlyphButton(this, Glyph.PAUSE, getString(R.string.pause)).apply { visibility = View.GONE; setOnClickListener { togglePause() } }
+        swapButton = GlyphButton(this, Glyph.SWAP, getString(R.string.swap_cameras)).apply { setOnClickListener { updateScene(scene.copy(swapped = !scene.swapped)) } }
 
         fun slot(child: View) = FrameLayout(this).apply {
             addView(child, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
@@ -322,8 +322,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             gravity = Gravity.CENTER_VERTICAL
             addView(slider)
             if (hasTele) {
-                val chip = GlyphChip(this@MainActivity, Glyph.TELE, "Tele").apply {
-                    contentDescription = "Lensa tele, mematikan kamera depan sementara"
+                val chip = GlyphChip(this@MainActivity, Glyph.TELE, getString(R.string.tele)).apply {
+                    contentDescription = getString(R.string.tele_desc)
                     setOnClickListener { toggleTele(cam) }
                 }
                 teleChip = chip
@@ -339,15 +339,15 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
     private fun applyZoomUi() {
         val s = zoomSlider ?: return
-        if (teleMode) s.configure(teleMin, TELE_MAX, teleZoom, listOf(6f, 8f), "Zoom lensa tele")
-        else s.configure(mainMin, mainMax, mainZoom, listOf(1f, 2f), "Zoom kamera utama")
+        if (teleMode) s.configure(teleMin, TELE_MAX, teleZoom, listOf(6f, 8f), getString(R.string.zoom_tele))
+        else s.configure(mainMin, mainMax, mainZoom, listOf(1f, 2f), getString(R.string.zoom_main))
     }
 
     /** Shows whether the telephoto is really in use; below the HAL's switch point (or in low light) the picture is a crop of the main lens. */
     private fun refreshTeleStatus() {
         val status = teleStatus ?: return
         if (!teleMode || teleSwitching) return
-        status.text = if (activeId == teleLensId) "Lensa tele aktif" else "Lensa tele tidak aktif (lensa $activeId)"
+        status.text = if (activeId == teleLensId) getString(R.string.tele_active) else getString(R.string.tele_inactive, activeId)
         status.visibility = View.VISIBLE
     }
 
@@ -360,7 +360,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         teleSwitching = true
         chip.isClickable = false
         slider.isEnabled = false
-        status.text = if (enter) "Mematikan kamera depan…" else "Menyalakan kamera depan…"
+        status.text = getString(if (enter) R.string.front_turning_off else R.string.front_turning_on)
         status.visibility = View.VISIBLE
         if (enter) {
             compositor?.frontEnabled = false
@@ -409,8 +409,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val canAsk = shouldShowRequestPermissionRationale(Manifest.permission.CAMERA) ||
             shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
         showMessage(
-            "Izin kamera dan mikrofon diperlukan untuk merekam.",
-            if (canAsk) "Beri izin" else "Buka pengaturan",
+            getString(R.string.permission_needed),
+            getString(if (canAsk) R.string.grant_permission else R.string.open_settings),
         ) {
             if (canAsk) requestPerms()
             else startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
@@ -454,7 +454,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         running = true
         cameraReady = false
         shutter.isEnabled = false
-        showMessage("Membuka kamera…")
+        showMessage(getString(R.string.opening_camera))
         val gl = GlCompositor(settings.resolution.output).also { it.scene = scene }
         val cam = DualCamera(this)
         compositor = gl
@@ -494,7 +494,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         ui.post {
             cameraReady = false
             shutter.isEnabled = false
-            showMessage("Kamera tidak bisa dibuka.\n$reason", "Coba lagi") {
+            showMessage(getString(R.string.camera_failed, reason), getString(R.string.retry)) {
                 val h = surfaceHolder
                 if (h != null) {
                     stopPipeline()
@@ -558,7 +558,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     ui.post {
                         busy = false
                         shutter.isEnabled = cameraReady
-                        Toast.makeText(this, "Tidak bisa mulai merekam: ${t.message}", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, getString(R.string.record_start_failed, t.message), Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -573,7 +573,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                     if (stopped && result.allOk) {
                         result.uris.firstOrNull()?.let { setThumbnail(it) }
                     } else {
-                        Toast.makeText(this, "Perekaman gagal disimpan", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, R.string.record_save_failed, Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -593,7 +593,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             }
             ui.post {
                 pauseButton.glyph = if (rec.isPaused) Glyph.PLAY else Glyph.PAUSE
-                pauseButton.contentDescription = if (rec.isPaused) "Lanjutkan" else "Jeda"
+                pauseButton.contentDescription = getString(if (rec.isPaused) R.string.resume else R.string.pause)
             }
         }
     }
@@ -607,7 +607,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         pauseButton.visibility = if (recording) View.VISIBLE else View.GONE
         thumbnail.visibility = if (recording) View.GONE else View.VISIBLE
         pauseButton.glyph = Glyph.PAUSE
-        pauseButton.contentDescription = "Jeda"
+        pauseButton.contentDescription = getString(R.string.pause)
         if (recording) timerText.text = "00:00"
     }
 
@@ -640,7 +640,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun refreshSettingsChip() {
         val s = activeSettings
         settingsChip.text = "${s.resolution.label} · ${s.fps}"
-        settingsChip.contentDescription = "Kualitas video: ${s.resolution.label}, ${s.fps} frame per detik. Ketuk untuk mengubah"
+        settingsChip.contentDescription = getString(R.string.video_quality_desc, s.resolution.label, s.fps)
     }
 
     /** Resolution and frame-rate picker; a change is saved and restarts the camera when the dialog closes. */
@@ -651,21 +651,21 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         fun label(text: String) = TextView(this).apply { setTextColor(Color.WHITE); textSize = 14f; text.also { this.text = it } }
         val resToggle = SegmentedToggle(
             this, Resolution.entries.map { it.label },
-            Resolution.entries.map { "Resolusi ${it.label}" },
+            Resolution.entries.map { getString(R.string.resolution_option_desc, it.label) },
         ) { res = Resolution.entries[it] }
         resToggle.select(Resolution.entries.indexOf(res), false)
         val fpsToggle = SegmentedToggle(
             this, fpsOptions.map { "$it" },
-            fpsOptions.map { "$it frame per detik" },
+            fpsOptions.map { getString(R.string.fps_option_desc, it) },
         ) { fps = fpsOptions[it] }
         fpsToggle.select(fpsOptions.indexOf(fps).coerceAtLeast(0), false)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = pill(0xFF1E1E1E.toInt(), 20f, this@MainActivity)
             setPadding(dpi(24f), dpi(20f), dpi(24f), dpi(24f))
-            addView(label("Resolusi"))
+            addView(label(getString(R.string.resolution)))
             addView(resToggle, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(8f) })
-            addView(label("Frame rate (fps)"), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(20f) })
+            addView(label(getString(R.string.frame_rate)), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(20f) })
             addView(fpsToggle, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(8f) })
         }
         val dialog = android.app.Dialog(this)
@@ -704,7 +704,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private fun openLastVideo() {
         val uri = lastVideo
         if (uri == null) {
-            Toast.makeText(this, "Belum ada video", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.no_video_yet, Toast.LENGTH_SHORT).show()
             return
         }
         try {
@@ -712,7 +712,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
                 Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
             )
         } catch (e: android.content.ActivityNotFoundException) {
-            Toast.makeText(this, "Tidak ada aplikasi untuk membuka video", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.no_app_for_video, Toast.LENGTH_SHORT).show()
         }
     }
 

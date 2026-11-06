@@ -1,3 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">DualVideo</string>
+
+    <string name="record_one_file">1 file</string>
+    <string name="record_two_files">2 files</string>
+    <string name="record_one_file_desc">Record one combined file</string>
+    <string name="record_two_files_desc">Record two separate files, one per camera</string>
+
+    <string name="layout_split">Split</string>
+    <string name="layout_stack">Stack</string>
+    <string name="layout_pip">PiP</string>
+
+    <string name="pause">Pause</string>
+    <string name="resume">Resume</string>
+    <string name="swap_cameras">Swap camera positions</string>
+    <string name="record_start">Start recording</string>
+    <string name="record_stop">Stop recording</string>
+    <string name="open_last_video">Open last video</string>
+    <string name="zoom">Zoom</string>
+
+    <string name="tele">Tele</string>
+    <string name="tele_desc">Telephoto lens, turns the front camera off for now</string>
+    <string name="zoom_tele">Telephoto zoom</string>
+    <string name="zoom_main">Main camera zoom</string>
+    <string name="tele_active">Telephoto lens active</string>
+    <string name="tele_inactive">Telephoto lens not active (lens %1$s)</string>
+    <string name="front_turning_off">Turning front camera off…</string>
+    <string name="front_turning_on">Turning front camera on…</string>
+
+    <string name="permission_needed">Camera and microphone permissions are required to record.</string>
+    <string name="grant_permission">Grant permission</string>
+    <string name="open_settings">Open settings</string>
+    <string name="opening_camera">Opening camera…</string>
+    <string name="camera_failed">Cannot open the camera.\n%1$s</string>
+    <string name="retry">Try again</string>
+    <string name="record_start_failed">Cannot start recording: %1$s</string>
+    <string name="record_save_failed">The recording could not be saved</string>
+    <string name="no_video_yet">No video yet</string>
+    <string name="no_app_for_video">No app can open this video</string>
+
+    <string name="video_quality_desc">Video quality: %1$s, %2$d frames per second. Tap to change</string>
+    <string name="resolution">Resolution</string>
+    <string name="resolution_option_desc">Resolution %1$s</string>
+    <string name="frame_rate">Frame rate (fps)</string>
+    <string name="fps_option_desc">%1$d frames per second</string>
 </resources>

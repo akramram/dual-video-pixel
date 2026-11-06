@@ -19,6 +19,7 @@ Record the **back and front cameras at the same time** on a Pixel phone, as one 
 - Smooth zoom slider for the back camera (0.7x ultra-wide to 4x), and a separate **Tele** mode
   - Tele turns the front camera off and binds the stream to the telephoto lens so zooming out never falls back to the main lens (the HAL does not allow the tele lens while the front camera is open)
 - Videos are saved to `Movies/DualVideo` through MediaStore; the last video appears as a thumbnail
+- Follows the system language: English (default) and Indonesian (`values-in`). Strings live in `res/values*/strings.xml`
 
 ## Build
 

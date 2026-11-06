@@ -135,7 +135,7 @@ class ZoomSlider(context: Context, private val onChange: (Float) -> Unit) : View
     init {
         isClickable = true
         isFocusable = true
-        contentDescription = "Zoom"
+        contentDescription = context.getString(R.string.zoom)
     }
 
     /** Sets the range and current value; [stopMarks] are drawn as small marks on the track. */
@@ -346,11 +346,11 @@ class ShutterView(context: Context) : View(context) {
                 addUpdateListener { progress = it.animatedValue as Float; invalidate() }
                 start()
             }
-            contentDescription = if (value) "Berhenti merekam" else "Mulai merekam"
+            contentDescription = context.getString(if (value) R.string.record_stop else R.string.record_start)
         }
 
     init {
-        contentDescription = "Mulai merekam"
+        contentDescription = context.getString(R.string.record_start)
         isClickable = true
         isFocusable = true
     }
@@ -438,7 +438,7 @@ class ThumbnailView(context: Context) : ImageView(context) {
         clipToOutline = true
         outlineProvider = ViewOutlineProvider.BACKGROUND
         background = pill(Palette.CHIP, 12f, context)
-        contentDescription = "Buka video terakhir"
+        contentDescription = context.getString(R.string.open_last_video)
         isClickable = true
         isFocusable = true
     }

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DualVideo</string>
+
+    <string name="record_one_file">1 file</string>
+    <string name="record_two_files">2 file</string>
+    <string name="record_one_file_desc">Rekam jadi satu file gabungan</string>
+    <string name="record_two_files_desc">Rekam jadi dua file terpisah, satu per kamera</string>
+
+    <string name="layout_split">Bagi</string>
+    <string name="layout_stack">Tumpuk</string>
+    <string name="layout_pip">PiP</string>
+
+    <string name="pause">Jeda</string>
+    <string name="resume">Lanjutkan</string>
+    <string name="swap_cameras">Tukar posisi kamera</string>
+    <string name="record_start">Mulai merekam</string>
+    <string name="record_stop">Berhenti merekam</string>
+    <string name="open_last_video">Buka video terakhir</string>
+    <string name="zoom">Zoom</string>
+
+    <string name="tele">Tele</string>
+    <string name="tele_desc">Lensa tele, mematikan kamera depan sementara</string>
+    <string name="zoom_tele">Zoom lensa tele</string>
+    <string name="zoom_main">Zoom kamera utama</string>
+    <string name="tele_active">Lensa tele aktif</string>
+    <string name="tele_inactive">Lensa tele tidak aktif (lensa %1$s)</string>
+    <string name="front_turning_off">Mematikan kamera depan…</string>
+    <string name="front_turning_on">Menyalakan kamera depan…</string>
+
+    <string name="permission_needed">Izin kamera dan mikrofon diperlukan untuk merekam.</string>
+    <string name="grant_permission">Beri izin</string>
+    <string name="open_settings">Buka pengaturan</string>
+    <string name="opening_camera">Membuka kamera…</string>
+    <string name="camera_failed">Kamera tidak bisa dibuka.\n%1$s</string>
+    <string name="retry">Coba lagi</string>
+    <string name="record_start_failed">Tidak bisa mulai merekam: %1$s</string>
+    <string name="record_save_failed">Perekaman gagal disimpan</string>
+    <string name="no_video_yet">Belum ada video</string>
+    <string name="no_app_for_video">Tidak ada aplikasi untuk membuka video</string>
+
+    <string name="video_quality_desc">Kualitas video: %1$s, %2$d frame per detik. Ketuk untuk mengubah</string>
+    <string name="resolution">Resolusi</string>
+    <string name="resolution_option_desc">Resolusi %1$s</string>
+    <string name="frame_rate">Frame rate (fps)</string>
+    <string name="fps_option_desc">%1$d frame per detik</string>
+</resources>
