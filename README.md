@@ -4,7 +4,7 @@ Record the **back and front cameras at the same time** on a Pixel phone, as one 
 
 - Package: `com.kurulabs.dualvideopixel`
 - Min SDK 30, target/compile SDK 36
-- Developed and tested on a **Pixel 6 Pro (Android 17)** only. Other devices must expose a concurrent back + front camera pair (`CameraManager.getConcurrentCameraIds`).
+- Tested on a **Pixel 6 Pro (Android 17)** and a **Pixel 5 (Android 14)**, see [Tested](#tested). Other devices must expose a concurrent back + front camera pair (`CameraManager.getConcurrentCameraIds`).
 
 ## Features
 
@@ -46,13 +46,22 @@ The feature set was derived by analysing the public Xiaomi camera APK (`com.andr
 
 Not reproduced: Xiaomi vendor session modes, snapshot while recording, grid, remote camera, H.265, front-camera mirroring.
 
+## Tested
+
+| Device | Android | Checked |
+|---|---|---|
+| Pixel 6 Pro | 17 | Dual camera, Split / Stack / PiP, swap, 1 file and 2 files, pause/resume, 720p/1080p, 24/30/60 fps, zoom slider, Tele mode, English and Indonesian UI. After the latest changes only dual camera, Tele on/off and a 1-file recording were repeated |
+| Pixel 5 | 14 | Dual camera (PiP), 1-file recording at 1080p, ultra-wide below 1x (back stream bound to the physical lens), thermal warning |
+
+Not tested on any other device. A Pixel 5 has no telephoto lens, so the Tele button does not appear there.
+
 ## Known limitations
 
 - Portrait only
 - Tele mode pauses the stream for about 0.5 to 1 s while the cameras are reopened, so a recording made across the switch has a short gap
-- Tele mode at 24/60 fps, long recordings (thermal), and TalkBack have not been tested
+- Tele mode at 24/60 fps, 2-file mode at 720p and at 24/60 fps, switching lens while recording, long recordings, landscape and TalkBack have not been tested
 - At 1080p60 some frames are dropped (measured about 55 to 60 fps)
-- Verified only on the Pixel 6 Pro
+- On a hot phone (Pixel 5 at thermal status 2 or higher) the audio track can come out shorter than the video; the app shows a warning from status 2. Correlation measured, cause not proven
 
 ## License
 
