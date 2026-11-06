@@ -50,10 +50,10 @@ Not reproduced: Xiaomi vendor session modes, snapshot while recording, grid, rem
 
 | Device | Android | Checked |
 |---|---|---|
-| Pixel 6 Pro | 17 | Dual camera, Split / Stack / PiP, swap, 1 file and 2 files, pause/resume, 720p/1080p, 24/30/60 fps, zoom slider, Tele mode, English and Indonesian UI. After the latest changes only dual camera, Tele on/off and a 1-file recording were repeated |
+| Pixel 6 Pro | 17 | Seen on screen in earlier builds: dual camera, Split / Stack / PiP preview, swap, pause/resume, 720p/1080p, 24/30/60 fps, zoom slider, Tele mode, English and Indonesian UI. Recorded output checked: 1 file in PiP (latest build, with audio), and 2 files in an earlier build. With the latest build only dual camera, Tele on/off and that 1-file PiP recording were repeated |
 | Pixel 5 | 14 | Dual camera (PiP), 1-file recording at 1080p, ultra-wide below 1x (back stream bound to the physical lens), thermal warning |
 
-Not tested on any other device. A Pixel 5 has no telephoto lens, so the Tele button does not appear there.
+Not tested on any other device. The recorded frames of Split and Stack in 1-file mode have not been checked. A Pixel 5 has no telephoto lens, so the Tele button does not appear there.
 
 ## Known limitations
 
