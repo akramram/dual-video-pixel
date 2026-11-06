@@ -137,7 +137,29 @@ class DualCamera(context: Context) {
         this.surfaces = surfaces
         this.fps = fps
         this.onError = onError
+        teleId = lensBinding(plan)
         openDevices(withFront = true, onReady)
+    }
+
+    /** Physical lens currently bound to the back stream (telephoto mode, or the two-lens binding); null = logical camera picks. */
+    val boundLens: String? get() = teleId
+
+    /**
+     * Pixel 5 class HAL (two back lenses, no tele): with the front camera open, a logical-camera zoom
+     * below the main lens fails (-38 "Function not implemented") and kills the device, whereas a stream
+     * bound to a physical lens works. These devices bind the stream to the main lens and switch to the
+     * ultra-wide by restarting the back session ([setLens]).
+     */
+    private fun lensBinding(plan: CameraPlan) = if (plan.lenses.size == 2) plan.lenses.last().physicalId else null
+
+    /** Rebinds the back stream to physical lens [physicalId] with the front camera open; the stream pauses while the sessions restart. */
+    fun setLens(physicalId: String, zoom: Float, onDone: () -> Unit) {
+        handler.post {
+            teleId = physicalId
+            backZoom = zoom
+            closeDevices()
+            openDevices(withFront = true, onDone)
+        }
     }
 
     /**
@@ -291,9 +313,8 @@ class DualCamera(context: Context) {
      * of that lens's native view, so the ratio is divided by the tele lens's own ratio (1.0 = native).
      */
     private fun applyZoom(b: CaptureRequest.Builder) {
-        val tele = teleId != null
-        val native = if (tele) plan?.lenses?.lastOrNull()?.ratio ?: 1f else 1f
-        b.set(CaptureRequest.CONTROL_ZOOM_RATIO, backZoom / native)
+        val native = plan?.lenses?.firstOrNull { it.physicalId == teleId }?.ratio ?: 1f
+        b.set(CaptureRequest.CONTROL_ZOOM_RATIO, (backZoom / native).coerceAtLeast(1f))
     }
 
     /**
@@ -311,7 +332,7 @@ class DualCamera(context: Context) {
             }.getOrNull()
         }.sortedBy { it.second }
         if (lenses.size < 2) return emptyList()
-        val main = lenses[(lenses.size - 1) / 2].second
+        val main = lenses[1].second
         return lenses.map { (id, equiv) ->
             val ratio = (equiv / main).coerceIn(range.lower, range.upper)
             Lens(ratio, lensLabel(ratio), id)

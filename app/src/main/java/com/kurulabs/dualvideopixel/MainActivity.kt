@@ -63,6 +63,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var teleStatus: TextView? = null
     private var teleMode = false
     private var teleSwitching = false
+    private var lensSwitching = false
     private var mainMin = 0.7f
     private var mainMax = 4f
     private var teleMin = 4f
@@ -295,7 +296,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         val hasTele = lenses.size >= 3
         val tele = lenses.last()
         mainMin = lenses.first().ratio
-        mainMax = tele.ratio
+        mainMax = if (hasTele) tele.ratio else 4f
         teleMin = tele.ratio
         mainZoom = 1f
         teleZoom = tele.ratio
@@ -305,6 +306,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             // In tele mode the stream is the tele lens itself and the ratio is the logical zoom (min = tele native).
             if (teleMode) teleZoom = z else mainZoom = z
             cam.setBackZoom(z)
+            if (!hasTele && !teleMode) rebindLens(lenses, cam)
         }
         zoomSlider = slider
         applyZoomUi()
@@ -335,6 +337,20 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
         lensHolder.addView(row, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
         lensHolder.addView(status, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dpi(56f) })
+    }
+
+    /** Two-lens devices: keeps the back stream bound to the ultra-wide below 1x and the main lens from 1x (see [DualCamera.setLens]). */
+    private fun rebindLens(lenses: List<Lens>, cam: DualCamera) {
+        if (lensSwitching) return
+        val want = (if (mainZoom < 1f) lenses.first() else lenses.last()).physicalId
+        if (want == cam.boundLens) return
+        lensSwitching = true
+        cam.setLens(want, mainZoom) {
+            ui.post {
+                lensSwitching = false
+                rebindLens(lenses, cam)
+            }
+        }
     }
 
     private fun applyZoomUi() {
